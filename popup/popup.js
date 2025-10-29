@@ -1,16 +1,18 @@
-const tabButtons = document.querySelectorAll(".tab");
-const tabPanels = document.querySelectorAll(".tab-panel");
+const tabButtons = {
+  seo: document.querySelector('[data-tab="seo"]'),
+  analytics: document.querySelector('[data-tab="analytics"]'),
+  opengraph: document.querySelector('[data-tab="opengraph"]'),
+  event: document.querySelector('[data-tab="event"]'),
+  cms: document.querySelector('[data-tab="cms"]'),
+};
+const panelMap = {
+  seo: document.querySelector('[data-panel="seo"]'),
+  analytics: document.querySelector('[data-panel="analytics"]'),
+  opengraph: document.querySelector('[data-panel="opengraph"]'),
+  event: document.querySelector('[data-panel="event"]'),
+  cms: document.querySelector('[data-panel="cms"]'),
+};
 const statusElement = document.getElementById("status");
-const fields = {
-  title: document.getElementById("title"),
-  description: document.getElementById("description"),
-  ogTitle: document.getElementById("ogTitle"),
-  ogDescription: document.getElementById("ogDescription"),
-};
-const counters = {
-  title: document.getElementById("titleCount"),
-  description: document.getElementById("descriptionCount"),
-};
 const cards = {
   title: document.getElementById("titleCard"),
   description: document.getElementById("descriptionCard"),
@@ -19,33 +21,109 @@ const cards = {
   ogDescription: document.getElementById("ogDescriptionCard"),
   canonicals: document.getElementById("canonicalsCard"),
   headings: document.getElementById("headingsCard"),
+  analytics: document.getElementById("gaCard"),
+  events: document.getElementById("eventsCard"),
+  cms: document.getElementById("cmsCard"),
 };
+const fieldConfigs = [
+  {
+    cardKey: "title",
+    element: document.getElementById("title"),
+    dataKey: "title",
+    counter: document.getElementById("titleCount"),
+    limit: 56,
+    limitLabel: "/56",
+  },
+  {
+    cardKey: "description",
+    element: document.getElementById("description"),
+    dataKey: "metaDescription",
+    counter: document.getElementById("descriptionCount"),
+    limit: 156,
+    limitLabel: "/156",
+  },
+  {
+    cardKey: "ogTitle",
+    element: document.getElementById("ogTitle"),
+    dataKey: "ogTitle",
+  },
+  {
+    cardKey: "ogDescription",
+    element: document.getElementById("ogDescription"),
+    dataKey: "ogDescription",
+  },
+];
 const canonicalsList = document.getElementById("canonicals");
 const headingsList = document.getElementById("headings");
 const robotsLink = document.getElementById("robotsLink");
 const gaStatusElement = document.getElementById("gaStatus");
-const gaCard = document.getElementById("gaCard");
+const cmsStatusElement = document.getElementById("cmsStatus");
+const googleAdsEventsList = document.getElementById("googleAdsEvents");
+const metaEventsList = document.getElementById("metaEvents");
 
-let hasData = false;
+const ANALYTICS_MAPPINGS = [
+  {
+    label: "Google Analytics 4",
+    key: "usesGA4",
+  },
+  {
+    label: "Piwik Pro",
+    key: "usesPiwik",
+  },
+  {
+    label: "Matomo",
+    key: "usesMatomo",
+  },
+  {
+    label: "Facebook Pixel",
+    key: "usesFacebookPixel",
+  },
+];
+
+const CMS_MAPPINGS = [
+  {
+    label: "SiteVision",
+    key: "usesSiteVision",
+  },
+  {
+    label: "WordPress",
+    key: "usesWordPress",
+  },
+  {
+    label: "Optimizely",
+    key: "usesOptimizely",
+  },
+];
 
 const activateTab = (tabName) => {
-  tabButtons.forEach((button) => {
-    const isActive = button.dataset.tab === tabName;
+  Object.entries(tabButtons).forEach(([name, button]) => {
+    if (!button) {
+      return;
+    }
+    const isActive = name === tabName;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-selected", String(isActive));
+    button.setAttribute("tabindex", isActive ? "0" : "-1");
   });
 
-  tabPanels.forEach((panel) => {
-    const isActive = panel.dataset.panel === tabName;
-    panel.hidden = !hasData || !isActive;
+  Object.entries(panelMap).forEach(([name, panel]) => {
+    if (!panel) {
+      return;
+    }
+    const isActive = name === tabName;
+    panel.hidden = !isActive;
+    panel.setAttribute("aria-hidden", String(!isActive));
   });
 };
 
-tabButtons.forEach((button) => {
-  button.addEventListener("click", () => activateTab(button.dataset.tab));
+Object.entries(tabButtons).forEach(([name, button]) => {
+  if (!button) {
+    return;
+  }
+  button.addEventListener("click", () => activateTab(name));
 });
 
-activateTab("overview");
+activateTab("seo");
 
 const queryActiveTab = () =>
   new Promise((resolve, reject) => {
@@ -74,10 +152,11 @@ const requestSeoData = (tabId) =>
 const updateStatus = (message, { muted = false } = {}) => {
   statusElement.textContent = message;
   statusElement.classList.toggle("muted", muted);
+  statusElement.hidden = false;
 };
 
-const setCardAlert = (key, isAlert) => {
-  const card = cards[key];
+const applyCardState = (cardKey, { isAlert = false, counter, link } = {}) => {
+  const card = cards[cardKey];
   if (!card) {
     return;
   }
@@ -94,12 +173,12 @@ const setCardAlert = (key, isAlert) => {
     }
   }
 
-  if (counters[key]) {
-    counters[key].classList.toggle("alert", isAlert);
+  if (counter) {
+    counter.classList.toggle("alert", isAlert);
   }
 
-  if (key === "robots") {
-    robotsLink.classList.toggle("alert", isAlert);
+  if (link) {
+    link.classList.toggle("alert", isAlert);
   }
 };
 
@@ -121,35 +200,72 @@ const renderList = (listElement, items, buildItem) => {
   return true;
 };
 
+const renderEventSummary = (listElement, eventData) => {
+  if (!listElement) {
+    return false;
+  }
+
+  listElement.replaceChildren();
+  const pageViews = Array.isArray(eventData?.pageViews) ? eventData.pageViews : [];
+  const conversions = Array.isArray(eventData?.conversions) ? eventData.conversions : [];
+  const hasEntries = pageViews.length > 0 || conversions.length > 0;
+
+  if (!hasEntries) {
+    const li = document.createElement("li");
+    li.textContent = "No events detected.";
+    listElement.appendChild(li);
+    return false;
+  }
+
+  pageViews.forEach(() => {
+    const li = document.createElement("li");
+    li.textContent = "Pageview";
+    listElement.appendChild(li);
+  });
+
+  conversions.forEach((name) => {
+    const li = document.createElement("li");
+    li.textContent = name ? `Conversion: ${name}` : "Conversion";
+    listElement.appendChild(li);
+  });
+
+  return true;
+};
+
 const renderSeoData = (data) => {
-  Object.entries(fields).forEach(([key, element]) => {
-    const rawValue = typeof data?.[key] === "string" ? data[key].trim() : data?.[key];
-    const displayValue = rawValue || "N/A";
-    element.textContent = displayValue;
+  fieldConfigs.forEach(({ cardKey, element, dataKey, counter, limit, limitLabel }) => {
+    const sourceValue = data?.[dataKey];
+    const normalizedValue = typeof sourceValue === "string" ? sourceValue.trim() : sourceValue;
+    const hasText = typeof normalizedValue === "string" && normalizedValue.length > 0;
+    element.textContent = hasText ? normalizedValue : "N/A";
 
-    if (counters[key]) {
-      counters[key].textContent = typeof rawValue === "string" && rawValue.length ? rawValue.length : 0;
+    let isAlert = !hasText;
+    let isSuccess = false;
+    const length = typeof normalizedValue === "string" ? normalizedValue.length : 0;
+    if (counter) {
+      counter.textContent = limitLabel ? `${length}${limitLabel}` : String(length);
+      if (cardKey === "title") {
+        if (length < 30) {
+          isAlert = true;
+        } else if (length <= 56) {
+          isSuccess = true;
+        } else {
+          isAlert = true;
+        }
+      } else if (!length || (limit && length > limit)) {
+        isAlert = true;
+      } else if (cardKey === "description" && length > 30) {
+        isSuccess = true;
+      }
     }
 
-    let isAlert = !displayValue || displayValue === "N/A";
+    const shouldAlertCard = cardKey !== "title" && cardKey !== "description";
+    applyCardState(cardKey, { isAlert: shouldAlertCard ? isAlert : false, counter: shouldAlertCard ? counter : undefined });
 
-    if (key === "title" && typeof rawValue === "string") {
-      const length = rawValue.length;
-      counters[key].textContent = length;
-      isAlert = !length || length > 56;
+    if (counter) {
+      counter.classList.toggle("alert", isAlert);
+      counter.classList.toggle("success", isSuccess && !isAlert);
     }
-
-    if (key === "description" && typeof rawValue === "string") {
-      const length = rawValue.length;
-      counters[key].textContent = length;
-      isAlert = !length || length > 156;
-    }
-
-    if (displayValue === "N/A") {
-      isAlert = true;
-    }
-
-    setCardAlert(key, isAlert);
   });
 
   let robotsHref = "#";
@@ -167,7 +283,10 @@ const renderSeoData = (data) => {
 
   robotsLink.href = robotsHref;
   robotsLink.textContent = robotsText;
-  setCardAlert("robots", robotsText === "N/A" || robotsHref === "#");
+  applyCardState("robots", {
+    isAlert: robotsText === "N/A" || robotsHref === "#",
+    link: robotsLink,
+  });
 
   const hasCanonicals = renderList(canonicalsList, data?.canonicalLinks, (link) => {
     const fragment = document.createDocumentFragment();
@@ -179,7 +298,7 @@ const renderSeoData = (data) => {
     fragment.append(rel, separator, href);
     return fragment;
   });
-  setCardAlert("canonicals", !hasCanonicals);
+  applyCardState("canonicals", { isAlert: !hasCanonicals });
 
   const hasHeadings = renderList(headingsList, data?.headings, (heading) => {
     const fragment = document.createDocumentFragment();
@@ -191,20 +310,55 @@ const renderSeoData = (data) => {
     fragment.append(tag, separator, text);
     return fragment;
   });
-  setCardAlert("headings", !hasHeadings);
+  applyCardState("headings", { isAlert: !hasHeadings });
 
-  const usesGa4 = Boolean(data?.analytics?.usesGA4);
-  gaStatusElement.textContent = usesGa4
-    ? "Google Analytics 4 detected on this page."
-    : "Google Analytics 4 was not detected.";
-  if (gaCard) {
-    gaCard.classList.remove("alert");
-    if (usesGa4) {
-      gaCard.classList.add("highlight");
+  const analyticsSignals = data?.analytics || {};
+  const detectedAnalytics = ANALYTICS_MAPPINGS.filter(({ key }) => Boolean(analyticsSignals[key]));
+  if (gaStatusElement) {
+    if (detectedAnalytics.length) {
+      const fragment = document.createDocumentFragment();
+      detectedAnalytics.forEach(({ label }) => {
+        const badge = document.createElement("span");
+        badge.className = "badge-item";
+        badge.textContent = label;
+        fragment.appendChild(badge);
+      });
+      gaStatusElement.classList.add("badge-list");
+      gaStatusElement.replaceChildren(fragment);
     } else {
-      gaCard.classList.remove("highlight");
+      gaStatusElement.classList.remove("badge-list");
+      gaStatusElement.textContent = "No known analytics platform detected.";
     }
   }
+
+  applyCardState("analytics", { isAlert: detectedAnalytics.length === 0 });
+
+  const cmsSignals = data?.cms || {};
+  const detectedCms = CMS_MAPPINGS.filter(({ key }) => Boolean(cmsSignals[key]));
+  if (cmsStatusElement) {
+    if (detectedCms.length) {
+      const fragment = document.createDocumentFragment();
+      detectedCms.forEach(({ label }) => {
+        const badge = document.createElement("span");
+        badge.className = "badge-item";
+        badge.textContent = label;
+        fragment.appendChild(badge);
+      });
+      cmsStatusElement.classList.add("badge-list");
+      cmsStatusElement.replaceChildren(fragment);
+    } else {
+      cmsStatusElement.classList.remove("badge-list");
+      cmsStatusElement.textContent = "No CMS patterns detected.";
+    }
+  }
+
+  applyCardState("cms", { isAlert: detectedCms.length === 0 });
+
+  const eventSignals = data?.events || {};
+  const hasGoogleAdsEvents = renderEventSummary(googleAdsEventsList, eventSignals.googleAds);
+  const hasMetaEvents = renderEventSummary(metaEventsList, eventSignals.meta);
+  const hasAnyEvent = hasGoogleAdsEvents || hasMetaEvents;
+  applyCardState("events", { isAlert: !hasAnyEvent });
 };
 
 const handleFetch = async () => {
@@ -223,9 +377,9 @@ const handleFetch = async () => {
     }
 
     renderSeoData(response.data);
-    updateStatus("SEO data fetched successfully.", { muted: true });
-    hasData = true;
-    activateTab("overview");
+    statusElement.textContent = "";
+    statusElement.hidden = true;
+    activateTab("seo");
   } catch (error) {
     console.error(error);
     updateStatus(error.message || "Something went wrong while collecting SEO data.", {

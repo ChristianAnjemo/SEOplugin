@@ -2,26 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>SEO Data</title>
+    <title>Get Data</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main class="popup">
       <header class="hero">
-        <h1>SEO Snapshot</h1>
-        <p>Instant metadata overview for the active tab.</p>
+        <h1>Digital marketing insights</h1>
+        <p>Instant metadata and analytics stack 🚀</p>
       </header>
       <nav class="tabs" role="tablist" aria-label="SEO panels">
         <button
           class="tab active"
-          id="overview-tab"
+          id="seo-tab"
           type="button"
           role="tab"
           aria-selected="true"
           aria-controls="results"
-          data-tab="overview"
+          data-tab="seo"
         >
-          Overview
+          <span>SEO</span>
         </button>
         <button
           class="tab"
@@ -32,11 +32,44 @@
           aria-controls="analyticsPanel"
           data-tab="analytics"
         >
-          Analytics
+          <span>Analytics</span>
+        </button>
+        <button
+          class="tab"
+          id="opengraph-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="openGraphPanel"
+          data-tab="opengraph"
+        >
+          <span>OG</span>
+        </button>
+        <button
+          class="tab"
+          id="events-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="eventsPanel"
+          data-tab="event"
+        >
+          <span>Event</span>
+        </button>
+        <button
+          class="tab"
+          id="cms-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="cmsPanel"
+          data-tab="cms"
+        >
+          <span>CMS</span>
         </button>
       </nav>
-      <section id="status" class="status muted">Collecting SEO data for this tab...</section>
-      <section id="results" class="results tab-panel" data-panel="overview" hidden role="tabpanel" aria-labelledby="overview-tab">
+      <section id="status" class="status muted">Collecting data for this tab...</section>
+      <section id="results" class="results tab-panel" data-panel="seo" hidden role="tabpanel" aria-labelledby="seo-tab">
         <div class="card highlight" id="titleCard" data-accent="true">
           <div class="card-header">
             <span class="label">Title</span>
@@ -57,21 +90,9 @@
           </div>
           <a id="robotsLink" class="value-link" href="#" target="_blank" rel="noopener noreferrer">N/A</a>
         </div>
-        <div class="card" id="ogTitleCard">
-          <div class="card-header">
-            <span class="label">OpenGraph title</span>
-          </div>
-          <p id="ogTitle" class="value">N/A</p>
-        </div>
-        <div class="card" id="ogDescriptionCard">
-          <div class="card-header">
-            <span class="label">OpenGraph description</span>
-          </div>
-          <p id="ogDescription" class="value">N/A</p>
-        </div>
         <div class="card" id="canonicalsCard">
           <div class="card-header">
-            <span class="label">Canonical &amp; alternate</span>
+            <span class="label">Canonical URLs</span>
           </div>
           <ul id="canonicals" class="list"></ul>
         </div>
@@ -83,11 +104,71 @@
         </div>
       </section>
       <section id="analyticsPanel" class="results tab-panel" data-panel="analytics" hidden role="tabpanel" aria-labelledby="analytics-tab">
-        <div class="card" id="gaCard">
+        <div class="card" id="gaCard" data-accent="true">
           <div class="card-header">
-            <span class="label">Google Analytics 4</span>
+            <span class="label">Analytics</span>
           </div>
           <p id="gaStatus" class="value">Pending scan...</p>
+        </div>
+      </section>
+      <section
+        id="openGraphPanel"
+        class="results tab-panel"
+        data-panel="opengraph"
+        hidden
+        role="tabpanel"
+        aria-labelledby="opengraph-tab"
+      >
+        <div class="card" id="ogTitleCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Open Graph title</span>
+          </div>
+          <p id="ogTitle" class="value">N/A</p>
+        </div>
+        <div class="card" id="ogDescriptionCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Open Graph description</span>
+          </div>
+          <p id="ogDescription" class="value">N/A</p>
+        </div>
+      </section>
+      <section
+        id="eventsPanel"
+        class="results tab-panel"
+        data-panel="event"
+        hidden
+        role="tabpanel"
+        aria-labelledby="events-tab"
+      >
+        <div class="card" id="eventsCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Event activity</span>
+          </div>
+          <div class="event-groups">
+            <div>
+              <h3>Google Ads</h3>
+              <ul id="googleAdsEvents" class="list"></ul>
+            </div>
+            <div>
+              <h3>Meta Pixel</h3>
+              <ul id="metaEvents" class="list"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        id="cmsPanel"
+        class="results tab-panel"
+        data-panel="cms"
+        hidden
+        role="tabpanel"
+        aria-labelledby="cms-tab"
+      >
+        <div class="card" id="cmsCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Detected CMS</span>
+          </div>
+          <p id="cmsStatus" class="value">Scanning...</p>
         </div>
       </section>
     </main>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SEO Plugin Panel</title>
+    <link rel="stylesheet" href="popup/popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="hero">
+        <h1>Digital marketing</h1>
+        <p>Instant metadata and analytics stack</p>
+      </header>
+      <nav class="tabs" role="tablist" aria-label="SEO panels">
+        <button
+          class="tab active"
+          id="seo-tab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="results"
+          data-tab="seo"
+        >
+          SEO
+        </button>
+        <button
+          class="tab"
+          id="analytics-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="analyticsPanel"
+          data-tab="analytics"
+        >
+          Analytics
+        </button>
+        <button
+          class="tab"
+          id="opengraph-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="openGraphPanel"
+          data-tab="opengraph"
+        >
+          OG
+        </button>
+        <button
+          class="tab"
+          id="events-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="eventsPanel"
+          data-tab="event"
+        >
+          Event
+        </button>
+        <button
+          class="tab"
+          id="cms-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="cmsPanel"
+          data-tab="cms"
+        >
+          CMS
+        </button>
+      </nav>
+      <section id="status" class="status muted">Collecting data for this tab...</section>
+      <section id="results" class="results tab-panel" data-panel="seo" hidden role="tabpanel" aria-labelledby="seo-tab">
+        <div class="card highlight" id="titleCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Title</span>
+            <span class="counter" id="titleCount">0</span>
+          </div>
+          <p id="title" class="value">N/A</p>
+        </div>
+        <div class="card highlight" id="descriptionCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Meta description</span>
+            <span class="counter" id="descriptionCount">0</span>
+          </div>
+          <p id="description" class="value">N/A</p>
+        </div>
+      </section>
+    </main>
+
+    <p style="padding: 1rem; color: #ef4444;">
+      Side panel loading is handled dynamically. This fallback panel is intentionally blank.
+    </p>
+  </body>
+</html>
