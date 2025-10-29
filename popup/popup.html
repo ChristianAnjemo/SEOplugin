@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SEO Data</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="hero">
+        <h1>SEO Snapshot</h1>
+        <p>Instant metadata overview for the active tab.</p>
+      </header>
+      <nav class="tabs" role="tablist" aria-label="SEO panels">
+        <button
+          class="tab active"
+          id="overview-tab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="results"
+          data-tab="overview"
+        >
+          Overview
+        </button>
+        <button
+          class="tab"
+          id="analytics-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="analyticsPanel"
+          data-tab="analytics"
+        >
+          Analytics
+        </button>
+      </nav>
+      <section id="status" class="status muted">Collecting SEO data for this tab...</section>
+      <section id="results" class="results tab-panel" data-panel="overview" hidden role="tabpanel" aria-labelledby="overview-tab">
+        <div class="card highlight" id="titleCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Title</span>
+            <span class="counter" id="titleCount">0</span>
+          </div>
+          <p id="title" class="value">N/A</p>
+        </div>
+        <div class="card highlight" id="descriptionCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Meta description</span>
+            <span class="counter" id="descriptionCount">0</span>
+          </div>
+          <p id="description" class="value">N/A</p>
+        </div>
+        <div class="card" id="robotsCard">
+          <div class="card-header">
+            <span class="label">Robots</span>
+          </div>
+          <a id="robotsLink" class="value-link" href="#" target="_blank" rel="noopener noreferrer">N/A</a>
+        </div>
+        <div class="card" id="ogTitleCard">
+          <div class="card-header">
+            <span class="label">OpenGraph title</span>
+          </div>
+          <p id="ogTitle" class="value">N/A</p>
+        </div>
+        <div class="card" id="ogDescriptionCard">
+          <div class="card-header">
+            <span class="label">OpenGraph description</span>
+          </div>
+          <p id="ogDescription" class="value">N/A</p>
+        </div>
+        <div class="card" id="canonicalsCard">
+          <div class="card-header">
+            <span class="label">Canonical &amp; alternate</span>
+          </div>
+          <ul id="canonicals" class="list"></ul>
+        </div>
+        <div class="card" id="headingsCard">
+          <div class="card-header">
+            <span class="label">Headings (H1-H2)</span>
+          </div>
+          <ul id="headings" class="list"></ul>
+        </div>
+      </section>
+      <section id="analyticsPanel" class="results tab-panel" data-panel="analytics" hidden role="tabpanel" aria-labelledby="analytics-tab">
+        <div class="card" id="gaCard">
+          <div class="card-header">
+            <span class="label">Google Analytics 4</span>
+          </div>
+          <p id="gaStatus" class="value">Pending scan...</p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

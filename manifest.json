@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "SEO Data Companion",
+  "version": "0.1.0",
+  "description": "Collects basic on-page SEO data from the currently active tab.",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Show SEO data"
+  },
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "minimum_chrome_version": "100"
+}
