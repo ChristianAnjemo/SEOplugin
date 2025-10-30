@@ -48,6 +48,107 @@ const serializeEventState = (tabId) => {
   };
 };
 
+const EVENT_INDICATOR_ID = "seo-plugin-event-indicator";
+
+const injectEventIndicator = (tabId) =>
+  chrome.scripting
+    .executeScript({
+      target: { tabId, allFrames: false },
+      func: (indicatorId) => {
+        const ensureBody = () => {
+          if (document.body) {
+            return document.body;
+          }
+          const body = document.createElement("body");
+          document.documentElement.appendChild(body);
+          return body;
+        };
+
+        const applyStyles = (indicator) => {
+          indicator.id = indicatorId;
+          indicator.textContent = "Event detected";
+          indicator.style.position = "fixed";
+          indicator.style.bottom = "16px";
+          indicator.style.right = "16px";
+          indicator.style.padding = "10px 14px";
+          indicator.style.minWidth = "120px";
+          indicator.style.borderRadius = "12px";
+          indicator.style.backgroundColor = "#00C853";
+          indicator.style.color = "#ffffff";
+          indicator.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+          indicator.style.fontSize = "14px";
+          indicator.style.fontWeight = "600";
+          indicator.style.display = "flex";
+          indicator.style.alignItems = "center";
+          indicator.style.justifyContent = "center";
+          indicator.style.boxShadow = "0 18px 38px -22px rgba(0, 200, 83, 0.8)";
+          indicator.style.zIndex = "2147483647";
+          indicator.style.pointerEvents = "none";
+          indicator.style.letterSpacing = "0.01em";
+        };
+
+        const host = ensureBody();
+        const existing = host.querySelector(`#${indicatorId}`);
+        if (existing) {
+          applyStyles(existing);
+          existing.style.display = "flex";
+          existing.style.opacity = "1";
+          return { success: true, created: false };
+        }
+
+        const indicator = document.createElement("div");
+        applyStyles(indicator);
+
+        host.appendChild(indicator);
+        return { success: true, created: true };
+      },
+      args: [EVENT_INDICATOR_ID],
+    })
+    .then((results) => results?.[0]?.result || { success: true, created: false });
+
+const notifyIndicatorContentScript = (tabId) =>
+  new Promise((resolve) => {
+    chrome.tabs.sendMessage(
+      tabId,
+      { action: "showEventIndicator" },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(response || { success: false, error: "No response from content script." });
+      }
+    );
+  });
+
+const showEventIndicator = async (tabId) => {
+  const contentResponse = await notifyIndicatorContentScript(tabId);
+  if (contentResponse?.success) {
+    return contentResponse;
+  }
+
+  return injectEventIndicator(tabId);
+};
+
+const notifyAnalyticsIndicator = (tabId, source) => {
+  try {
+    chrome.runtime.sendMessage(
+      {
+        action: "conversionDetected",
+        tabId,
+        source,
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          // Popup might not be open; ignore the error.
+        }
+      }
+    );
+  } catch (error) {
+    // Ignore messaging errors; popup may not be active.
+  }
+};
+
 const resetTabEvents = (tabId) => {
   tabEventStore.delete(tabId);
 };
@@ -118,6 +219,8 @@ const handleNetworkEvent = (details) => {
         ? label || normalizeString(params.get("value")) || "Conversion"
         : label || rawEventName || "Conversion";
       state.googleAds.conversions.add(entryLabel);
+      showEventIndicator(tabId).catch(() => {});
+      notifyAnalyticsIndicator(tabId, "googleAds");
     }
 
     return;
@@ -138,6 +241,8 @@ const handleNetworkEvent = (details) => {
       rawEventName;
 
     state.meta.conversions.add(conversionName || "Conversion");
+    showEventIndicator(tabId).catch(() => {});
+    notifyAnalyticsIndicator(tabId, "meta");
   }
 };
 
@@ -160,14 +265,67 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request?.action !== "collectSEOData" || typeof request.tabId !== "number") {
+  if (!request || typeof request.action !== "string") {
+    return;
+  }
+
+  if (request.action === "injectCornerIndicator") {
+    const tabId =
+      typeof request.tabId === "number" ? request.tabId : typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+
+    if (typeof tabId !== "number") {
+      if (typeof sendResponse === "function") {
+        sendResponse({ success: false, error: "Missing tabId for indicator injection." });
+      }
+      return;
+    }
+
+    showEventIndicator(tabId)
+      .then((result) => {
+        if (typeof sendResponse === "function") {
+          sendResponse({ success: true, result });
+        }
+      })
+      .catch((error) => {
+        console.error("Indicator injection failed", error);
+        if (typeof sendResponse === "function") {
+          sendResponse({ success: false, error: error?.message || "Indicator injection failed." });
+        }
+      });
+
+    return true;
+  }
+
+  if (request.action === "openAnalyticsFromIndicator") {
+    chrome.action
+      .openPopup()
+      .then(() => {
+        chrome.runtime.sendMessage({ action: "focusAnalyticsTab" }).catch(() => {});
+      })
+      .catch(() => {});
+
+    if (typeof sendResponse === "function") {
+      sendResponse({ success: true });
+    }
+
+    return false;
+  }
+
+  if (request.action !== "collectSEOData") {
+    return;
+  }
+
+  if (typeof request.tabId !== "number") {
+    if (typeof sendResponse === "function") {
+      sendResponse({ success: false, error: "Invalid tabId." });
+    }
     return;
   }
 
   chrome.scripting.executeScript(
     {
       target: { tabId: request.tabId, allFrames: false },
-      func: () => {
+      func: async () => {
         const getMetaContent = (selector) => {
           const node = document.querySelector(selector);
           if (!node) {
@@ -188,6 +346,55 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             rel: link.getAttribute("rel"),
             href: link.getAttribute("href"),
           }));
+
+        const collectAnchorSummary = () => {
+          const anchors = Array.from(document.querySelectorAll("a"));
+          const location = document.location;
+          let internal = 0;
+          let external = 0;
+
+          anchors.forEach((anchor) => {
+            const rawHref = anchor.getAttribute("href") || "";
+            const href = rawHref.trim();
+
+            if (!href) {
+              internal += 1;
+              return;
+            }
+
+            if (href.startsWith("#")) {
+              internal += 1;
+              return;
+            }
+
+            if (href.startsWith("/")) {
+              internal += 1;
+              return;
+            }
+
+            if (href.startsWith("./") || href.startsWith("../")) {
+              internal += 1;
+              return;
+            }
+
+            try {
+              const url = new URL(href, location.origin);
+              if (url.origin === location.origin) {
+                internal += 1;
+              } else {
+                external += 1;
+              }
+            } catch (error) {
+              external += 1;
+            }
+          });
+
+          return {
+            total: anchors.length,
+            internal,
+            external,
+          };
+        };
 
         const collectAnalyticsSignals = () => {
           const signals = {
@@ -243,11 +450,61 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return signals;
         };
 
-        const detectCmsSignals = () => {
+        const collectSocialMeta = () => {
+          const og = [];
+          const twitter = [];
+          const facebook = [];
+          const linkedin = [];
+
+          Array.from(document.querySelectorAll("meta")).forEach((meta) => {
+            const property = meta.getAttribute("property") || meta.getAttribute("itemprop") || "";
+            const name = meta.getAttribute("name") || "";
+            const content = meta.getAttribute("content") || meta.getAttribute("value") || "";
+
+            if (!content) {
+              return;
+            }
+
+            if (!property && !name) {
+              return;
+            }
+
+            const entry = {
+              property: property || null,
+              name: name || null,
+              content,
+            };
+
+            if (property.startsWith("og:")) {
+              og.push(entry);
+            } else if (property.startsWith("fb:")) {
+              facebook.push(entry);
+            } else if (name.startsWith("twitter:")) {
+              twitter.push(entry);
+            } else if (property.startsWith("article:")) {
+              linkedin.push(entry);
+            } else if (name.startsWith("linkedin:")) {
+              linkedin.push(entry);
+            }
+          });
+
+          const ogImageEntry = og.find((entry) => entry.property === "og:image");
+
+          return {
+            og,
+            twitter,
+            facebook,
+            linkedin,
+            ogImage: ogImageEntry ? ogImageEntry.content : null,
+          };
+        };
+
+        const detectCmsSignals = async () => {
           const cms = {
             usesSiteVision: false,
             usesWordPress: false,
             usesOptimizely: false,
+            optimizelyLoginDetected: false,
           };
 
           const cookieString = document.cookie || "";
@@ -267,6 +524,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           ]
             .join(" ")
             .toLowerCase();
+
+          if (!cms.usesSiteVision && htmlSource.includes("sitevision")) {
+            cms.usesSiteVision = true;
+          }
+
+          if (!cms.usesSiteVision) {
+            const generator = document
+              .querySelector("meta[name='generator']")
+              ?.getAttribute("content")
+              ?.toLowerCase();
+            if (generator && generator.includes("sitevision")) {
+              cms.usesSiteVision = true;
+            }
+          }
 
           if (!cms.usesWordPress && (htmlSource.includes("wp-content") || htmlSource.includes("wordpress"))) {
             cms.usesWordPress = true;
@@ -290,6 +561,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
           }
 
+          if (!cms.usesSiteVision) {
+            Array.from(document.querySelectorAll("script, link, meta" )).some((node) => {
+              const source = (
+                node.src ||
+                node.href ||
+                node.getAttribute("content") ||
+                node.getAttribute("data-sitevision") ||
+                node.textContent ||
+                ""
+              ).toLowerCase();
+              if (source.includes("sitevision")) {
+                cms.usesSiteVision = true;
+                return true;
+              }
+              return false;
+            });
+          }
+
           if (!cms.usesOptimizely) {
             Array.from(document.querySelectorAll("script")).some((node) => {
               const source = (node.src || node.textContent || "").toLowerCase();
@@ -301,8 +590,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
           }
 
+          if (!cms.usesOptimizely) {
+            const loginPaths = [
+              "/util/login.aspx",
+              "/util/Login.aspx",
+              "/episerver/",
+              "/episerver/cms",
+              "/episerver/cms/Login",
+              "/episerver/cms/100.aspx",
+            ];
+
+            await Promise.allSettled(
+              loginPaths.map(async (path) => {
+                try {
+                  const response = await fetch(new URL(path, document.location.origin).toString(), {
+                    method: "HEAD",
+                    credentials: "include",
+                  });
+
+                  if (response.status === 200 || response.status === 403) {
+                    cms.usesOptimizely = true;
+                    cms.optimizelyLoginDetected = true;
+                  }
+                } catch (error) {
+                  // ignore fetch errors
+                }
+              })
+            );
+          }
+
           return cms;
         };
+
+        const analyticsSignals = collectAnalyticsSignals();
+        const socialMeta = collectSocialMeta();
+        const cmsSignals = await detectCmsSignals();
 
         return {
           url: document.location.href,
@@ -312,9 +634,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           ogTitle: getMetaContent("meta[property='og:title']"),
           ogDescription: getMetaContent("meta[property='og:description']"),
           canonicalLinks: collectLinks(),
+          anchors: collectAnchorSummary(),
           headings: collectHeadings(),
-          analytics: collectAnalyticsSignals(),
-          cms: detectCmsSignals(),
+          analytics: analyticsSignals,
+          socialMeta,
+          cms: cmsSignals,
         };
       },
     },

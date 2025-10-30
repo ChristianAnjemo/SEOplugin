@@ -2,17 +2,17 @@ const tabButtons = {
   seo: document.querySelector('[data-tab="seo"]'),
   analytics: document.querySelector('[data-tab="analytics"]'),
   opengraph: document.querySelector('[data-tab="opengraph"]'),
-  event: document.querySelector('[data-tab="event"]'),
   cms: document.querySelector('[data-tab="cms"]'),
 };
 const panelMap = {
   seo: document.querySelector('[data-panel="seo"]'),
   analytics: document.querySelector('[data-panel="analytics"]'),
   opengraph: document.querySelector('[data-panel="opengraph"]'),
-  event: document.querySelector('[data-panel="event"]'),
   cms: document.querySelector('[data-panel="cms"]'),
 };
 const statusElement = document.getElementById("status");
+const analyticsIndicator = document.getElementById("analyticsIndicator");
+let currentTabId = null;
 const cards = {
   title: document.getElementById("titleCard"),
   description: document.getElementById("descriptionCard"),
@@ -20,6 +20,7 @@ const cards = {
   ogTitle: document.getElementById("ogTitleCard"),
   ogDescription: document.getElementById("ogDescriptionCard"),
   canonicals: document.getElementById("canonicalsCard"),
+  links: document.getElementById("linksCard"),
   headings: document.getElementById("headingsCard"),
   analytics: document.getElementById("gaCard"),
   events: document.getElementById("eventsCard"),
@@ -46,16 +47,21 @@ const fieldConfigs = [
     cardKey: "ogTitle",
     element: document.getElementById("ogTitle"),
     dataKey: "ogTitle",
+    hideWhenEmpty: true,
   },
   {
     cardKey: "ogDescription",
     element: document.getElementById("ogDescription"),
     dataKey: "ogDescription",
+    hideWhenEmpty: true,
   },
 ];
 const canonicalsList = document.getElementById("canonicals");
 const headingsList = document.getElementById("headings");
 const robotsLink = document.getElementById("robotsLink");
+const linksTotal = document.getElementById("linksTotal");
+const linksInternal = document.getElementById("linksInternal");
+const linksExternal = document.getElementById("linksExternal");
 const gaStatusElement = document.getElementById("gaStatus");
 const cmsStatusElement = document.getElementById("cmsStatus");
 const googleAdsEventsList = document.getElementById("googleAdsEvents");
@@ -82,7 +88,7 @@ const ANALYTICS_MAPPINGS = [
 
 const CMS_MAPPINGS = [
   {
-    label: "SiteVision",
+    label: "Sitevision",
     key: "usesSiteVision",
   },
   {
@@ -114,6 +120,10 @@ const activateTab = (tabName) => {
     panel.hidden = !isActive;
     panel.setAttribute("aria-hidden", String(!isActive));
   });
+
+  if (tabName === "analytics" && analyticsIndicator) {
+    analyticsIndicator.classList.remove("visible");
+  }
 };
 
 Object.entries(tabButtons).forEach(([name, button]) => {
@@ -134,6 +144,26 @@ const queryActiveTab = () =>
       }
       resolve(tabs[0]);
     });
+  });
+
+const hideEventIndicatorOnPage = (tabId) =>
+  new Promise((resolve) => {
+    if (typeof tabId !== "number") {
+      resolve({ success: false, error: "Invalid tab id." });
+      return;
+    }
+
+    chrome.tabs.sendMessage(
+      tabId,
+      { action: "hideEventIndicator" },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(response || { success: true, hidden: false });
+      }
+    );
   });
 
 const requestSeoData = (tabId) =>
@@ -219,12 +249,14 @@ const renderEventSummary = (listElement, eventData) => {
 
   pageViews.forEach(() => {
     const li = document.createElement("li");
+    li.classList.add("event-entry", "event-pageview");
     li.textContent = "Pageview";
     listElement.appendChild(li);
   });
 
   conversions.forEach((name) => {
     const li = document.createElement("li");
+    li.classList.add("event-entry", "event-conversion");
     li.textContent = name ? `Conversion: ${name}` : "Conversion";
     listElement.appendChild(li);
   });
@@ -233,13 +265,34 @@ const renderEventSummary = (listElement, eventData) => {
 };
 
 const renderSeoData = (data) => {
-  fieldConfigs.forEach(({ cardKey, element, dataKey, counter, limit, limitLabel }) => {
+  console.debug("SEO plugin payload", data);
+  fieldConfigs.forEach(({ cardKey, element, dataKey, counter, limit, limitLabel, hideWhenEmpty = false }) => {
     const sourceValue = data?.[dataKey];
     const normalizedValue = typeof sourceValue === "string" ? sourceValue.trim() : sourceValue;
     const hasText = typeof normalizedValue === "string" && normalizedValue.length > 0;
+
+    const cardRef = cards[cardKey];
+    if (cardRef && hideWhenEmpty) {
+      const shouldHide = !hasText;
+      cardRef.hidden = shouldHide;
+      cardRef.setAttribute("aria-hidden", String(shouldHide));
+      if (shouldHide) {
+        cardRef.classList.remove("alert", "highlight");
+        element.textContent = "";
+        return;
+      }
+      cardRef.hidden = false;
+      cardRef.setAttribute("aria-hidden", "false");
+    }
+
+    if (cardRef && !hideWhenEmpty) {
+      cardRef.hidden = false;
+      cardRef.setAttribute("aria-hidden", "false");
+    }
+
     element.textContent = hasText ? normalizedValue : "N/A";
 
-    let isAlert = !hasText;
+  let isAlert = !hasText;
     let isSuccess = false;
     const length = typeof normalizedValue === "string" ? normalizedValue.length : 0;
     if (counter) {
@@ -300,6 +353,27 @@ const renderSeoData = (data) => {
   });
   applyCardState("canonicals", { isAlert: !hasCanonicals });
 
+  const anchorSummary = data?.anchors || { total: 0, internal: 0, external: 0 };
+  const linksCardAlert = anchorSummary.total === 0;
+  applyCardState("links", { isAlert: linksCardAlert, counter: linksTotal });
+
+  if (linksTotal) {
+    linksTotal.textContent = String(anchorSummary.total);
+    if (!linksCardAlert) {
+      linksTotal.classList.toggle("alert", anchorSummary.total > 300);
+    } else {
+      linksTotal.classList.add("alert");
+    }
+  }
+  if (linksInternal) {
+    linksInternal.textContent = `Internal: ${anchorSummary.internal}`;
+    linksInternal.classList.toggle("alert", anchorSummary.internal > 150);
+  }
+  if (linksExternal) {
+    linksExternal.textContent = `External: ${anchorSummary.external}`;
+    linksExternal.classList.toggle("alert", anchorSummary.external > 100);
+  }
+
   const hasHeadings = renderList(headingsList, data?.headings, (heading) => {
     const fragment = document.createDocumentFragment();
     const tag = document.createElement("strong");
@@ -358,7 +432,43 @@ const renderSeoData = (data) => {
   const hasGoogleAdsEvents = renderEventSummary(googleAdsEventsList, eventSignals.googleAds);
   const hasMetaEvents = renderEventSummary(metaEventsList, eventSignals.meta);
   const hasAnyEvent = hasGoogleAdsEvents || hasMetaEvents;
-  applyCardState("events", { isAlert: !hasAnyEvent });
+  applyCardState("events", { isAlert: false });
+
+  const googleSection = document.querySelector("#eventsCard .event-groups > div:nth-child(1)");
+  const metaSection = document.querySelector("#eventsCard .event-groups > div:nth-child(2)");
+  if (googleSection) {
+    googleSection.style.display = hasGoogleAdsEvents ? "" : "none";
+  }
+  if (metaSection) {
+    metaSection.style.display = hasMetaEvents ? "" : "none";
+  }
+
+  const eventsCard = document.getElementById("eventsCard");
+  if (eventsCard) {
+    const header = eventsCard.querySelector(".card-header");
+    let helper = eventsCard.querySelector(".events-helper");
+    if (!helper) {
+      helper = document.createElement("p");
+      helper.className = "events-helper";
+      helper.textContent = "Events from Meta and Google Ads will show up here.";
+      if (header?.nextSibling) {
+        eventsCard.insertBefore(helper, header.nextSibling);
+      } else {
+        eventsCard.appendChild(helper);
+      }
+    }
+    helper.hidden = hasAnyEvent;
+  }
+
+  const googleConversionCount = Array.isArray(eventSignals?.googleAds?.conversions)
+    ? eventSignals.googleAds.conversions.length
+    : 0;
+  const metaConversionCount = Array.isArray(eventSignals?.meta?.conversions)
+    ? eventSignals.meta.conversions.length
+    : 0;
+  if (analyticsIndicator) {
+    analyticsIndicator.classList.toggle("visible", googleConversionCount + metaConversionCount > 0);
+  }
 };
 
 const handleFetch = async () => {
@@ -371,12 +481,15 @@ const handleFetch = async () => {
       return;
     }
 
+    currentTabId = tab.id;
+
     const response = await requestSeoData(tab.id);
     if (!response?.success) {
       throw new Error(response?.error || "Unknown error while collecting SEO data.");
     }
 
     renderSeoData(response.data);
+    await hideEventIndicatorOnPage(tab.id);
     statusElement.textContent = "";
     statusElement.hidden = true;
     activateTab("seo");
@@ -390,4 +503,25 @@ const handleFetch = async () => {
 
 handleFetch().catch((error) => {
   console.error("Initial fetch failed", error);
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || typeof message.action !== "string") {
+    return;
+  }
+
+  if (message.action === "conversionDetected") {
+    if (typeof message.tabId === "number" && message.tabId !== currentTabId) {
+      return;
+    }
+
+    if (analyticsIndicator) {
+      analyticsIndicator.classList.add("visible");
+    }
+    return;
+  }
+
+  if (message.action === "focusAnalyticsTab") {
+    activateTab("analytics");
+  }
 });

@@ -33,6 +33,7 @@
           data-tab="analytics"
         >
           <span>Analytics</span>
+          <span class="tab-indicator" id="analyticsIndicator" aria-hidden="true"></span>
         </button>
         <button
           class="tab"
@@ -44,17 +45,6 @@
           data-tab="opengraph"
         >
           <span>OG</span>
-        </button>
-        <button
-          class="tab"
-          id="events-tab"
-          type="button"
-          role="tab"
-          aria-selected="false"
-          aria-controls="eventsPanel"
-          data-tab="event"
-        >
-          <span>Event</span>
         </button>
         <button
           class="tab"
@@ -96,6 +86,16 @@
           </div>
           <ul id="canonicals" class="list"></ul>
         </div>
+        <div class="card" id="linksCard">
+          <div class="card-header">
+            <span class="label">Links</span>
+            <span class="counter" id="linksTotal">0</span>
+          </div>
+          <div class="link-summary">
+            <span id="linksInternal" class="link-pill">Internal: 0</span>
+            <span id="linksExternal" class="link-pill">External: 0</span>
+          </div>
+        </div>
         <div class="card" id="headingsCard">
           <div class="card-header">
             <span class="label">Headings (H1-H2)</span>
@@ -109,6 +109,21 @@
             <span class="label">Analytics</span>
           </div>
           <p id="gaStatus" class="value">Pending scan...</p>
+        </div>
+        <div class="card" id="eventsCard" data-accent="true">
+          <div class="card-header">
+            <span class="label">Event activity</span>
+          </div>
+          <div class="event-groups">
+            <div>
+              <h3>Google Ads</h3>
+              <ul id="googleAdsEvents" class="list"></ul>
+            </div>
+            <div>
+              <h3>Meta Pixel</h3>
+              <ul id="metaEvents" class="list"></ul>
+            </div>
+          </div>
         </div>
       </section>
       <section
@@ -130,30 +145,6 @@
             <span class="label">Open Graph description</span>
           </div>
           <p id="ogDescription" class="value">N/A</p>
-        </div>
-      </section>
-      <section
-        id="eventsPanel"
-        class="results tab-panel"
-        data-panel="event"
-        hidden
-        role="tabpanel"
-        aria-labelledby="events-tab"
-      >
-        <div class="card" id="eventsCard" data-accent="true">
-          <div class="card-header">
-            <span class="label">Event activity</span>
-          </div>
-          <div class="event-groups">
-            <div>
-              <h3>Google Ads</h3>
-              <ul id="googleAdsEvents" class="list"></ul>
-            </div>
-            <div>
-              <h3>Meta Pixel</h3>
-              <ul id="metaEvents" class="list"></ul>
-            </div>
-          </div>
         </div>
       </section>
       <section

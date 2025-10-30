@@ -88,6 +88,27 @@ body {
   z-index: 1;
 }
 
+.tab-indicator {
+  position: absolute !Important;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.8);
+  z-index: 2;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.tab-indicator.visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
 @keyframes tabPulse {
   0% {
     transform: scale(0.85);
@@ -232,6 +253,12 @@ body {
   color: var(--alert);
 }
 
+.value-link.placeholder {
+  color: var(--muted);
+  pointer-events: none;
+  text-decoration: none;
+}
+
 .badge-list {
   display: grid;
   gap: 0.35rem;
@@ -265,6 +292,37 @@ body {
   gap: 0.75rem;
 }
 
+.events-helper {
+  margin: 0.75rem 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.link-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.link-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.counter.alert,
+.link-pill.alert {
+  background: var(--alert-soft);
+  color: var(--alert);
+}
+
 .event-groups h3 {
   margin: 0 0 0.35rem;
   font-size: 0.92rem;
@@ -288,6 +346,22 @@ body {
   padding-left: 0.95rem;
   line-height: 1.35;
   color: var(--fg);
+}
+
+
+.list li.event-entry {
+  padding-left: 1.25rem;
+}
+
+.list li.event-entry::before {
+  left: 0;
+  top: 0.35rem;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.65);
+  opacity: 1;
 }
 
 .list li::before {
