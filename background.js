@@ -1,10 +1,56 @@
 const tabEventStore = new Map();
+const tabOriginMap = new Map();
 
 const EVENT_URL_PATTERNS = [
   "*://*.googleads.g.doubleclick.net/*",
   "*://*.googleadservices.com/*",
+  "*://*.google.com/ccm/collect*",
   "*://*.facebook.com/tr*",
 ];
+
+// Known Optimizely/Episerver login paths to probe.
+const OPTIMIZELY_LOGIN_PATHS = [
+  "/util/login.aspx",
+  "/util/Login.aspx",
+  "/episerver/",
+  "/episerver/cms",
+  "/episerver/cms/Login",
+  "/episerver/cms/100.aspx",
+];
+
+// Try a single URL with the provided HTTP method and treat CORS failures as a miss.
+const tryFetchOnce = async (url, method) => {
+  try {
+    const response = await fetch(url, {
+      method,
+      credentials: "omit",
+      cache: "no-store",
+      mode: "cors",
+    });
+    return response.status === 200 || response.status === 403;
+  } catch (error) {
+    return false;
+  }
+};
+
+// Probe all known login paths for the supplied origin and report if any respond.
+const checkOptimizelyLogins = async (origin) => {
+  // Bail out if we were not given a valid origin to probe against.
+  if (!origin) {
+    return false;
+  }
+
+  // Test each known login endpoint until one responds with an allowed status.
+  for (const path of OPTIMIZELY_LOGIN_PATHS) {
+    const target = new URL(path, origin).toString();
+    if ((await tryFetchOnce(target, "HEAD")) || (await tryFetchOnce(target, "GET"))) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 
 const createEmptyEventState = () => ({
   googleAds: {
@@ -157,7 +203,28 @@ const normalizeString = (value) => (typeof value === "string" ? value.trim() : "
 
 const handleNetworkEvent = (details) => {
   const { tabId, url } = details;
-  if (tabId < 0 || !url) {
+  let effectiveTabId = tabId;
+  if (effectiveTabId < 0) {
+    const possibleSources = [details.initiator, details.documentUrl].filter(Boolean);
+    for (const source of possibleSources) {
+      try {
+        const origin = new URL(source).origin;
+        for (const [knownTabId, storedOrigin] of tabOriginMap.entries()) {
+          if (storedOrigin === origin) {
+            effectiveTabId = knownTabId;
+            break;
+          }
+        }
+        if (effectiveTabId >= 0) {
+          break;
+        }
+      } catch (error) {
+        // ignore parsing errors
+      }
+    }
+  }
+
+  if (effectiveTabId < 0 || !url) {
     return;
   }
 
@@ -172,15 +239,20 @@ const handleNetworkEvent = (details) => {
   const path = parsedUrl.pathname.toLowerCase();
   const params = parsedUrl.searchParams;
 
-  const state = getEventState(tabId);
+  const state = getEventState(effectiveTabId);
 
-  if (host.includes("googleads.g.doubleclick.net") || host.includes("googleadservices.com")) {
+  if (
+    host.includes("googleads.g.doubleclick.net") ||
+    host.includes("googleadservices.com") ||
+    (host.endsWith("google.com") && path.startsWith("/ccm/collect"))
+  ) {
     const rawEventName =
       params.get("ev") ||
       params.get("event") ||
       params.get("action") ||
       params.get("cmd") ||
       params.get("etype") ||
+      params.get("en") ||
       "";
     const eventName = normalizeString(rawEventName).toLowerCase();
     const label =
@@ -191,9 +263,13 @@ const handleNetworkEvent = (details) => {
       normalizeString(params.get("utm_campaign")) ||
       normalizeString(params.get("dl")) ||
       normalizeString(params.get("gclid")) ||
+      normalizeString(params.get("tid")) ||
       normalizeString(parsedUrl.pathname.split("/").filter(Boolean).pop());
 
-    const isConversionPath = path.includes("/pagead/conversion/") || path.includes("/pagead/1p-conversion/");
+    const isConversionPath =
+      path.includes("/pagead/conversion/") ||
+      path.includes("/pagead/1p-conversion/") ||
+      path.includes("/ccm/collect") && eventName.includes("conversion");
 
     const isExplicitConversion =
       isConversionPath ||
@@ -214,13 +290,15 @@ const handleNetworkEvent = (details) => {
 
     if (isPageView) {
       state.googleAds.pageViews.add("Pageview");
+      showEventIndicator(effectiveTabId).catch(() => {});
+      notifyAnalyticsIndicator(effectiveTabId, "googleAds");
     } else if (isExplicitConversion || eventName || label) {
       const entryLabel = isConversionPath
         ? label || normalizeString(params.get("value")) || "Conversion"
         : label || rawEventName || "Conversion";
       state.googleAds.conversions.add(entryLabel);
-      showEventIndicator(tabId).catch(() => {});
-      notifyAnalyticsIndicator(tabId, "googleAds");
+      showEventIndicator(effectiveTabId).catch(() => {});
+      notifyAnalyticsIndicator(effectiveTabId, "googleAds");
     }
 
     return;
@@ -232,6 +310,8 @@ const handleNetworkEvent = (details) => {
 
     if (!eventName || eventName === "pageview" || eventName === "page_view") {
       state.meta.pageViews.add("Pageview");
+      showEventIndicator(effectiveTabId).catch(() => {});
+      notifyAnalyticsIndicator(effectiveTabId, "meta");
       return;
     }
 
@@ -241,8 +321,8 @@ const handleNetworkEvent = (details) => {
       rawEventName;
 
     state.meta.conversions.add(conversionName || "Conversion");
-    showEventIndicator(tabId).catch(() => {});
-    notifyAnalyticsIndicator(tabId, "meta");
+    showEventIndicator(effectiveTabId).catch(() => {});
+    notifyAnalyticsIndicator(effectiveTabId, "meta");
   }
 };
 
@@ -251,11 +331,22 @@ chrome.webRequest.onBeforeRequest.addListener(handleNetworkEvent, { urls: EVENT_
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading") {
     resetTabEvents(tabId);
+    tabOriginMap.delete(tabId);
+  }
+
+  if (changeInfo.url) {
+    try {
+      const origin = new URL(changeInfo.url).origin;
+      tabOriginMap.set(tabId, origin);
+    } catch (error) {
+      tabOriginMap.delete(tabId);
+    }
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   resetTabEvents(tabId);
+  tabOriginMap.delete(tabId);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -267,6 +358,23 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (!request || typeof request.action !== "string") {
     return;
+  }
+
+  if (request.action === "checkOptimizelyLogins") {
+    const origin = typeof request.origin === "string" ? request.origin : null;
+    checkOptimizelyLogins(origin)
+      .then((result) => {
+        if (typeof sendResponse === "function") {
+          sendResponse({ success: true, result });
+        }
+      })
+      .catch((error) => {
+        if (typeof sendResponse === "function") {
+          sendResponse({ success: false, error: error?.message || "Optimizely probe failed." });
+        }
+      });
+
+    return true;
   }
 
   if (request.action === "injectCornerIndicator") {
@@ -336,7 +444,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         };
 
         const collectHeadings = () =>
-          Array.from(document.querySelectorAll("h1, h2")).map((heading) => ({
+          Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")).map((heading) => ({
             tag: heading.tagName.toLowerCase(),
             text: heading.textContent.trim(),
           }));
@@ -346,6 +454,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             rel: link.getAttribute("rel"),
             href: link.getAttribute("href"),
           }));
+
+        const collectHrefLang = () =>
+          Array.from(document.querySelectorAll("link[rel='alternate'][hreflang]")).map((link) => ({
+            hreflang: link.getAttribute("hreflang") || "",
+            href: link.getAttribute("href") || "",
+          }));
+
+        const collectStructuredData = () =>
+          Array.from(document.querySelectorAll('script[type*="ld+json" i]')).map((script) => {
+            const inlineContent = script.textContent?.trim();
+            if (inlineContent) {
+              return inlineContent;
+            }
+
+            const src = script.getAttribute("src");
+            if (src) {
+              return `{"_metacat_note": "External structured data referenced at ${src}"}`;
+            }
+
+            return "";
+          }).filter(Boolean);
 
         const collectAnchorSummary = () => {
           const anchors = Array.from(document.querySelectorAll("a"));
@@ -600,23 +729,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               "/episerver/cms/100.aspx",
             ];
 
-            await Promise.allSettled(
-              loginPaths.map(async (path) => {
+            const checkUrl = async (path) => {
+              const target = new URL(path, document.location.origin).toString();
+              const attempt = async (method) => {
                 try {
-                  const response = await fetch(new URL(path, document.location.origin).toString(), {
-                    method: "HEAD",
-                    credentials: "include",
+                  const response = await fetch(target, {
+                    method,
+                    credentials: "omit",
+                    cache: "no-store",
+                    mode: "cors",
                   });
-
                   if (response.status === 200 || response.status === 403) {
-                    cms.usesOptimizely = true;
-                    cms.optimizelyLoginDetected = true;
+                    return true;
                   }
+                  return false;
                 } catch (error) {
-                  // ignore fetch errors
+                  return false;
                 }
-              })
-            );
+              };
+
+              let result = await attempt("HEAD");
+              if (!result) {
+                result = await attempt("GET");
+              }
+              return result;
+            };
+
+            const outcomes = await Promise.all(loginPaths.map((path) => checkUrl(path)));
+            if (outcomes.some(Boolean)) {
+              cms.usesOptimizely = true;
+              cms.optimizelyLoginDetected = true;
+            }
           }
 
           return cms;
@@ -626,6 +769,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const socialMeta = collectSocialMeta();
         const cmsSignals = await detectCmsSignals();
 
+        const root = document.documentElement;
+        const htmlLang = root ? root.getAttribute("lang") || null : null;
+
         return {
           url: document.location.href,
           title: document.title || null,
@@ -634,10 +780,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           ogTitle: getMetaContent("meta[property='og:title']"),
           ogDescription: getMetaContent("meta[property='og:description']"),
           canonicalLinks: collectLinks(),
+          hrefLangLinks: collectHrefLang(),
           anchors: collectAnchorSummary(),
           headings: collectHeadings(),
+          structuredDataRaw: collectStructuredData(),
           analytics: analyticsSignals,
           socialMeta,
+          pageLang: htmlLang,
           cms: cmsSignals,
         };
       },
@@ -654,6 +803,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const [scriptResult] = results || [];
       const payload = scriptResult?.result || {};
       const events = serializeEventState(request.tabId);
+
+      if (payload?.url) {
+        try {
+          const origin = new URL(payload.url).origin;
+          tabOriginMap.set(request.tabId, origin);
+        } catch (error) {
+          // ignore
+        }
+      }
 
       sendResponse({
         success: true,

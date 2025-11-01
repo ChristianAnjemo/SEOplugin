@@ -8,8 +8,15 @@
   <body>
     <main class="popup">
       <header class="hero">
-        <h1>Digital marketing insights</h1>
-        <p>Instant metadata and analytics stack 🚀</p>
+        <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle dark mode">
+          <span class="theme-icon" aria-hidden="true">🌙</span>
+        </button>
+        <div class="hero-heading">
+          <img class="hero-icon" src="../assets/icons/spacecat128.png" alt="Cat logo" />
+          <h1 class="hero-title">Metacat</h1>
+          
+        </div>
+        <p>Instant stats for your website 🚀</p>
       </header>
       <nav class="tabs" role="tablist" aria-label="SEO panels">
         <button
@@ -86,6 +93,18 @@
           </div>
           <ul id="canonicals" class="list"></ul>
         </div>
+        <div class="card" id="hrefLangCard">
+          <div class="card-header">
+            <span class="label">Hreflang</span>
+          </div>
+          <ul id="hrefLangList" class="list"></ul>
+        </div>
+        <div class="card" id="structuredDataCard">
+          <div class="card-header">
+            <span class="label">Structured Data</span>
+          </div>
+          <div id="structuredDataContainer" class="structured-data-container"></div>
+        </div>
         <div class="card" id="linksCard">
           <div class="card-header">
             <span class="label">Links</span>
@@ -97,10 +116,14 @@
           </div>
         </div>
         <div class="card" id="headingsCard">
-          <div class="card-header">
-            <span class="label">Headings (H1-H2)</span>
+          <button id="headingsToggle" class="card-header toggle-button" type="button" aria-expanded="false">
+            <span class="label">Headings</span>
+            <span class="toggle-indicator" aria-hidden="true">▼</span>
+          </button>
+          <div id="headingsSummary" class="heading-summary"></div>
+          <div id="headingsDetail" class="heading-detail" hidden>
+            <ul id="headings" class="list"></ul>
           </div>
-          <ul id="headings" class="list"></ul>
         </div>
       </section>
       <section id="analyticsPanel" class="results tab-panel" data-panel="analytics" hidden role="tabpanel" aria-labelledby="analytics-tab">
