@@ -57,6 +57,10 @@ const createEmptyEventState = () => ({
     pageViews: new Set(),
     conversions: new Set(),
   },
+  ga4: {
+    pageViews: new Set(),
+    conversions: new Set(),
+  },
   meta: {
     pageViews: new Set(),
     conversions: new Set(),
@@ -78,6 +82,7 @@ const serializeEventState = (tabId) => {
   if (!state) {
     return {
       googleAds: { pageViews: [], conversions: [] },
+      ga4: { pageViews: [], conversions: [] },
       meta: { pageViews: [], conversions: [] },
     };
   }
@@ -86,6 +91,10 @@ const serializeEventState = (tabId) => {
     googleAds: {
       pageViews: toArray(state.googleAds.pageViews),
       conversions: toArray(state.googleAds.conversions),
+    },
+    ga4: {
+      pageViews: toArray(state.ga4.pageViews),
+      conversions: toArray(state.ga4.conversions),
     },
     meta: {
       pageViews: toArray(state.meta.pageViews),
@@ -195,6 +204,60 @@ const notifyAnalyticsIndicator = (tabId, source) => {
   }
 };
 
+const BADGE_ACTIVE_TEXT = "1";
+const BADGE_COLOR = "#00C853";
+let badgeColorApplied = false;
+
+const setBadgeTextSafe = (text) => {
+  if (!chrome.action || typeof chrome.action.setBadgeText !== "function") {
+    return;
+  }
+
+  try {
+    const result = chrome.action.setBadgeText({ text });
+    if (result && typeof result.catch === "function") {
+      result.catch(() => {});
+    }
+  } catch (error) {
+    // Ignore badge errors; badge is a best-effort signal.
+  }
+};
+
+const ensureBadgeColor = () => {
+  if (badgeColorApplied || !chrome.action || typeof chrome.action.setBadgeBackgroundColor !== "function") {
+    return;
+  }
+
+  try {
+    const result = chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
+    if (result && typeof result.then === "function") {
+      result
+        .then(() => {
+          badgeColorApplied = true;
+        })
+        .catch(() => {});
+      return;
+    }
+    badgeColorApplied = true;
+  } catch (error) {
+    // Ignore errors to avoid spamming logs.
+  }
+};
+
+const activateBadge = () => {
+  ensureBadgeColor();
+  setBadgeTextSafe(BADGE_ACTIVE_TEXT);
+};
+
+const clearBadge = () => {
+  setBadgeTextSafe("");
+};
+
+const flagDetectedEvent = (tabId, source) => {
+  showEventIndicator(tabId).catch(() => {});
+  notifyAnalyticsIndicator(tabId, source);
+};
+
 const resetTabEvents = (tabId) => {
   tabEventStore.delete(tabId);
 };
@@ -244,6 +307,7 @@ const handleNetworkEvent = (details) => {
   if (
     host.includes("googleads.g.doubleclick.net") ||
     host.includes("googleadservices.com") ||
+    host.includes("google-analytics.com") ||
     (host.endsWith("google.com") && path.startsWith("/ccm/collect"))
   ) {
     const rawEventName =
@@ -254,7 +318,10 @@ const handleNetworkEvent = (details) => {
       params.get("etype") ||
       params.get("en") ||
       "";
-    const eventName = normalizeString(rawEventName).toLowerCase();
+    const normalizedRawEventName = normalizeString(rawEventName);
+    const eventName = normalizedRawEventName.toLowerCase();
+    const tid = normalizeString(params.get("tid")) || "";
+
     const label =
       normalizeString(params.get("conversion_label")) ||
       normalizeString(params.get("label")) ||
@@ -263,13 +330,33 @@ const handleNetworkEvent = (details) => {
       normalizeString(params.get("utm_campaign")) ||
       normalizeString(params.get("dl")) ||
       normalizeString(params.get("gclid")) ||
-      normalizeString(params.get("tid")) ||
       normalizeString(parsedUrl.pathname.split("/").filter(Boolean).pop());
 
+    const isGa4Host = host.includes("google-analytics.com") && path.includes("/g/collect");
+    const isConsentMode = host.endsWith("google.com") && path.startsWith("/ccm/collect");
+    const tidUpper = tid.toUpperCase();
+    const isGa4Tid = tidUpper.startsWith("G-") || tidUpper.startsWith("GT-");
+    const isGoogleAdsTid = tidUpper.startsWith("AW-") || tidUpper.startsWith("DC-");
+
+    const { targetChannel, indicatorSource, isGa4Hit } = (() => {
+      if (isGa4Tid) {
+        return { targetChannel: state.ga4, indicatorSource: "ga4", isGa4Hit: true };
+      }
+      if (isGoogleAdsTid) {
+        return { targetChannel: state.googleAds, indicatorSource: "googleAds", isGa4Hit: false };
+      }
+      if (isGa4Host) {
+        return { targetChannel: state.ga4, indicatorSource: "ga4", isGa4Hit: true };
+      }
+      if (isConsentMode && !isGoogleAdsTid) {
+        return { targetChannel: state.ga4, indicatorSource: "ga4", isGa4Hit: true };
+      }
+      return { targetChannel: state.googleAds, indicatorSource: "googleAds", isGa4Hit: false };
+    })();
+
     const isConversionPath =
-      path.includes("/pagead/conversion/") ||
-      path.includes("/pagead/1p-conversion/") ||
-      path.includes("/ccm/collect") && eventName.includes("conversion");
+      (!isGa4Hit && (path.includes("/pagead/conversion/") || path.includes("/pagead/1p-conversion/"))) ||
+      (isGa4Hit && eventName.includes("conversion"));
 
     const isExplicitConversion =
       isConversionPath ||
@@ -289,16 +376,18 @@ const handleNetworkEvent = (details) => {
         params.get("npa") === "0");
 
     if (isPageView) {
-      state.googleAds.pageViews.add("Pageview");
-      showEventIndicator(effectiveTabId).catch(() => {});
-      notifyAnalyticsIndicator(effectiveTabId, "googleAds");
-    } else if (isExplicitConversion || eventName || label) {
-      const entryLabel = isConversionPath
-        ? label || normalizeString(params.get("value")) || "Conversion"
-        : label || rawEventName || "Conversion";
-      state.googleAds.conversions.add(entryLabel);
-      showEventIndicator(effectiveTabId).catch(() => {});
-      notifyAnalyticsIndicator(effectiveTabId, "googleAds");
+      const pageLabel = isGa4Hit ? normalizedRawEventName || "page_view" : "Pageview";
+      targetChannel.pageViews.add(pageLabel);
+      flagDetectedEvent(effectiveTabId, indicatorSource);
+    } else if (isExplicitConversion || normalizedRawEventName || label) {
+      const entryLabel = isGa4Hit
+        ? normalizedRawEventName || label || "Event"
+        : isConversionPath
+            ? label || normalizeString(params.get("value")) || "Conversion"
+            : label || normalizedRawEventName || "Conversion";
+      targetChannel.conversions.add(entryLabel);
+      activateBadge();
+      flagDetectedEvent(effectiveTabId, indicatorSource);
     }
 
     return;
@@ -310,8 +399,7 @@ const handleNetworkEvent = (details) => {
 
     if (!eventName || eventName === "pageview" || eventName === "page_view") {
       state.meta.pageViews.add("Pageview");
-      showEventIndicator(effectiveTabId).catch(() => {});
-      notifyAnalyticsIndicator(effectiveTabId, "meta");
+      flagDetectedEvent(effectiveTabId, "meta");
       return;
     }
 
@@ -321,8 +409,8 @@ const handleNetworkEvent = (details) => {
       rawEventName;
 
     state.meta.conversions.add(conversionName || "Conversion");
-    showEventIndicator(effectiveTabId).catch(() => {});
-    notifyAnalyticsIndicator(effectiveTabId, "meta");
+    activateBadge();
+    flagDetectedEvent(effectiveTabId, "meta");
   }
 };
 
@@ -430,6 +518,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
+  clearBadge();
+
   chrome.scripting.executeScript(
     {
       target: { tabId: request.tabId, allFrames: false },
@@ -531,6 +621,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             usesPiwik: false,
             usesMatomo: false,
             usesFacebookPixel: false,
+            usesHotjar: false,
           };
 
           if (typeof window._mtm !== "undefined") {
@@ -562,6 +653,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (!signals.usesFacebookPixel && source.includes("connect.facebook.net")) {
               signals.usesFacebookPixel = true;
             }
+
+            if (
+              !signals.usesHotjar &&
+              (source.includes("hotjar.com") ||
+                source.includes("hotjar-") ||
+                source.includes("static.hotjar") ||
+                source.includes("hotjar.js"))
+            ) {
+              signals.usesHotjar = true;
+            }
           });
 
           if (!signals.usesPiwik && headSource.includes("piwik")) {
@@ -574,6 +675,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
           if (!signals.usesFacebookPixel && headSource.includes("connect.facebook.net")) {
             signals.usesFacebookPixel = true;
+          }
+
+          if (
+            !signals.usesHotjar &&
+            (typeof window.hj === "function" ||
+              typeof window._hjSettings !== "undefined" ||
+              headSource.includes("hotjar.com"))
+          ) {
+            signals.usesHotjar = true;
           }
 
           return signals;
@@ -719,46 +829,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
           }
 
-          if (!cms.usesOptimizely) {
-            const loginPaths = [
-              "/util/login.aspx",
-              "/util/Login.aspx",
-              "/episerver/",
-              "/episerver/cms",
-              "/episerver/cms/Login",
-              "/episerver/cms/100.aspx",
-            ];
-
-            const checkUrl = async (path) => {
-              const target = new URL(path, document.location.origin).toString();
-              const attempt = async (method) => {
+          if (!cms.usesOptimizely && chrome?.runtime?.sendMessage) {
+            try {
+              const probeResult = await new Promise((resolve) => {
                 try {
-                  const response = await fetch(target, {
-                    method,
-                    credentials: "omit",
-                    cache: "no-store",
-                    mode: "cors",
-                  });
-                  if (response.status === 200 || response.status === 403) {
-                    return true;
-                  }
-                  return false;
+                  chrome.runtime.sendMessage(
+                    {
+                      action: "checkOptimizelyLogins",
+                      origin: document.location.origin,
+                    },
+                    (response) => {
+                      if (chrome.runtime.lastError) {
+                        resolve(null);
+                        return;
+                      }
+                      resolve(response || null);
+                    }
+                  );
                 } catch (error) {
-                  return false;
+                  resolve(null);
                 }
-              };
+              });
 
-              let result = await attempt("HEAD");
-              if (!result) {
-                result = await attempt("GET");
+              if (probeResult?.success && probeResult.result) {
+                cms.usesOptimizely = true;
+                cms.optimizelyLoginDetected = true;
               }
-              return result;
-            };
-
-            const outcomes = await Promise.all(loginPaths.map((path) => checkUrl(path)));
-            if (outcomes.some(Boolean)) {
-              cms.usesOptimizely = true;
-              cms.optimizelyLoginDetected = true;
+            } catch (error) {
+              // Silently ignore background probe failures.
             }
           }
 

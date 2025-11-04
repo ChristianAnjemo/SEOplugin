@@ -73,6 +73,7 @@ const linksExternal = document.getElementById("linksExternal");
 const gaStatusElement = document.getElementById("gaStatus");
 const cmsStatusElement = document.getElementById("cmsStatus");
 const googleAdsEventsList = document.getElementById("googleAdsEvents");
+const ga4EventsList = document.getElementById("ga4Events");
 const metaEventsList = document.getElementById("metaEvents");
 
 const ANALYTICS_MAPPINGS = [
@@ -91,6 +92,10 @@ const ANALYTICS_MAPPINGS = [
   {
     label: "Facebook Pixel",
     key: "usesFacebookPixel",
+  },
+  {
+    label: "Hotjar",
+    key: "usesHotjar",
   },
 ];
 
@@ -741,14 +746,19 @@ const renderSeoData = (data) => {
 
   const eventSignals = data?.events || {};
   const hasGoogleAdsEvents = renderEventSummary(googleAdsEventsList, eventSignals.googleAds);
+  const hasGa4Events = renderEventSummary(ga4EventsList, eventSignals.ga4);
   const hasMetaEvents = renderEventSummary(metaEventsList, eventSignals.meta);
-  const hasAnyEvent = hasGoogleAdsEvents || hasMetaEvents;
+  const hasAnyEvent = hasGoogleAdsEvents || hasGa4Events || hasMetaEvents;
   applyCardState("events", { isAlert: false });
 
-  const googleSection = document.querySelector("#eventsCard .event-groups > div:nth-child(1)");
-  const metaSection = document.querySelector("#eventsCard .event-groups > div:nth-child(2)");
+  const googleSection = document.getElementById("googleAdsEventsSection");
+  const ga4Section = document.getElementById("ga4EventsSection");
+  const metaSection = document.getElementById("metaEventsSection");
   if (googleSection) {
     googleSection.style.display = hasGoogleAdsEvents ? "" : "none";
+  }
+  if (ga4Section) {
+    ga4Section.style.display = hasGa4Events ? "" : "none";
   }
   if (metaSection) {
     metaSection.style.display = hasMetaEvents ? "" : "none";
@@ -774,11 +784,32 @@ const renderSeoData = (data) => {
   const googleConversionCount = Array.isArray(eventSignals?.googleAds?.conversions)
     ? eventSignals.googleAds.conversions.length
     : 0;
+  const ga4ConversionCount = Array.isArray(eventSignals?.ga4?.conversions)
+    ? eventSignals.ga4.conversions.length
+    : 0;
   const metaConversionCount = Array.isArray(eventSignals?.meta?.conversions)
     ? eventSignals.meta.conversions.length
     : 0;
+  const googlePageViewCount = Array.isArray(eventSignals?.googleAds?.pageViews)
+    ? eventSignals.googleAds.pageViews.length
+    : 0;
+  const ga4PageViewCount = Array.isArray(eventSignals?.ga4?.pageViews)
+    ? eventSignals.ga4.pageViews.length
+    : 0;
+  const metaPageViewCount = Array.isArray(eventSignals?.meta?.pageViews)
+    ? eventSignals.meta.pageViews.length
+    : 0;
   if (analyticsIndicator) {
-    analyticsIndicator.classList.toggle("visible", googleConversionCount + metaConversionCount > 0);
+    analyticsIndicator.classList.toggle(
+      "visible",
+      googleConversionCount +
+        ga4ConversionCount +
+        metaConversionCount +
+        googlePageViewCount +
+        ga4PageViewCount +
+        metaPageViewCount >
+        0
+    );
   }
 };
 

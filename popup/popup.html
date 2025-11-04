@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Get Data</title>
+    <title>Metacat</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -16,7 +16,7 @@
           <h1 class="hero-title">Metacat</h1>
           
         </div>
-        <p>Instant stats for your website 🚀</p>
+        <p>Get fast stats from current page.</p>
       </header>
       <nav class="tabs" role="tablist" aria-label="SEO panels">
         <button
@@ -138,11 +138,15 @@
             <span class="label">Event activity</span>
           </div>
           <div class="event-groups">
-            <div>
+            <div id="googleAdsEventsSection">
               <h3>Google Ads</h3>
               <ul id="googleAdsEvents" class="list"></ul>
             </div>
-            <div>
+            <div id="ga4EventsSection">
+              <h3>GA4</h3>
+              <ul id="ga4Events" class="list"></ul>
+            </div>
+            <div id="metaEventsSection">
               <h3>Meta Pixel</h3>
               <ul id="metaEvents" class="list"></ul>
             </div>
