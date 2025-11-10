@@ -25,17 +25,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content/event-indicator.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ],
   "host_permissions": [
     "<all_urls>"
   ]

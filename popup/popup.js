@@ -277,26 +277,6 @@ const queryActiveTab = () =>
     });
   });
 
-const hideEventIndicatorOnPage = (tabId) =>
-  new Promise((resolve) => {
-    if (typeof tabId !== "number") {
-      resolve({ success: false, error: "Invalid tab id." });
-      return;
-    }
-
-    chrome.tabs.sendMessage(
-      tabId,
-      { action: "hideEventIndicator" },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          resolve({ success: false, error: chrome.runtime.lastError.message });
-          return;
-        }
-        resolve(response || { success: true, hidden: false });
-      }
-    );
-  });
-
 const requestSeoData = (tabId) =>
   new Promise((resolve) => {
     chrome.runtime.sendMessage(
@@ -721,7 +701,7 @@ const renderSeoData = (data) => {
     }
   }
 
-  applyCardState("analytics", { isAlert: detectedAnalytics.length === 0 });
+  applyCardState("analytics", { isAlert: false });
 
   const cmsSignals = data?.cms || {};
   const detectedCms = CMS_MAPPINGS.filter(({ key }) => Boolean(cmsSignals[key]));
@@ -831,7 +811,6 @@ const handleFetch = async () => {
     }
 
     renderSeoData(response.data);
-    await hideEventIndicatorOnPage(tab.id);
     statusElement.textContent = "";
     statusElement.hidden = true;
     activateTab("seo");
@@ -861,9 +840,5 @@ chrome.runtime.onMessage.addListener((message) => {
       analyticsIndicator.classList.add("visible");
     }
     return;
-  }
-
-  if (message.action === "focusAnalyticsTab") {
-    activateTab("analytics");
   }
 });

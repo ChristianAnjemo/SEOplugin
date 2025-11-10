@@ -1,10 +1,13 @@
 const tabEventStore = new Map();
 const tabOriginMap = new Map();
+const tabReferrerPolicyStore = new Map();
 
 const EVENT_URL_PATTERNS = [
   "*://*.googleads.g.doubleclick.net/*",
   "*://*.googleadservices.com/*",
+  "*://*.googlesyndication.com/*",
   "*://*.google.com/ccm/collect*",
+  "*://*.google.com/pagead/*",
   "*://*.facebook.com/tr*",
 ];
 
@@ -103,88 +106,6 @@ const serializeEventState = (tabId) => {
   };
 };
 
-const EVENT_INDICATOR_ID = "seo-plugin-event-indicator";
-
-const injectEventIndicator = (tabId) =>
-  chrome.scripting
-    .executeScript({
-      target: { tabId, allFrames: false },
-      func: (indicatorId) => {
-        const ensureBody = () => {
-          if (document.body) {
-            return document.body;
-          }
-          const body = document.createElement("body");
-          document.documentElement.appendChild(body);
-          return body;
-        };
-
-        const applyStyles = (indicator) => {
-          indicator.id = indicatorId;
-          indicator.textContent = "Event detected";
-          indicator.style.position = "fixed";
-          indicator.style.bottom = "16px";
-          indicator.style.right = "16px";
-          indicator.style.padding = "10px 14px";
-          indicator.style.minWidth = "120px";
-          indicator.style.borderRadius = "12px";
-          indicator.style.backgroundColor = "#00C853";
-          indicator.style.color = "#ffffff";
-          indicator.style.fontFamily = "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
-          indicator.style.fontSize = "14px";
-          indicator.style.fontWeight = "600";
-          indicator.style.display = "flex";
-          indicator.style.alignItems = "center";
-          indicator.style.justifyContent = "center";
-          indicator.style.boxShadow = "0 18px 38px -22px rgba(0, 200, 83, 0.8)";
-          indicator.style.zIndex = "2147483647";
-          indicator.style.pointerEvents = "none";
-          indicator.style.letterSpacing = "0.01em";
-        };
-
-        const host = ensureBody();
-        const existing = host.querySelector(`#${indicatorId}`);
-        if (existing) {
-          applyStyles(existing);
-          existing.style.display = "flex";
-          existing.style.opacity = "1";
-          return { success: true, created: false };
-        }
-
-        const indicator = document.createElement("div");
-        applyStyles(indicator);
-
-        host.appendChild(indicator);
-        return { success: true, created: true };
-      },
-      args: [EVENT_INDICATOR_ID],
-    })
-    .then((results) => results?.[0]?.result || { success: true, created: false });
-
-const notifyIndicatorContentScript = (tabId) =>
-  new Promise((resolve) => {
-    chrome.tabs.sendMessage(
-      tabId,
-      { action: "showEventIndicator" },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          resolve({ success: false, error: chrome.runtime.lastError.message });
-          return;
-        }
-        resolve(response || { success: false, error: "No response from content script." });
-      }
-    );
-  });
-
-const showEventIndicator = async (tabId) => {
-  const contentResponse = await notifyIndicatorContentScript(tabId);
-  if (contentResponse?.success) {
-    return contentResponse;
-  }
-
-  return injectEventIndicator(tabId);
-};
-
 const notifyAnalyticsIndicator = (tabId, source) => {
   try {
     chrome.runtime.sendMessage(
@@ -254,12 +175,12 @@ const clearBadge = () => {
 };
 
 const flagDetectedEvent = (tabId, source) => {
-  showEventIndicator(tabId).catch(() => {});
   notifyAnalyticsIndicator(tabId, source);
 };
 
 const resetTabEvents = (tabId) => {
   tabEventStore.delete(tabId);
+  tabReferrerPolicyStore.delete(tabId);
 };
 
 const normalizeString = (value) => (typeof value === "string" ? value.trim() : "");
@@ -304,12 +225,17 @@ const handleNetworkEvent = (details) => {
 
   const state = getEventState(effectiveTabId);
 
-  if (
+  const isConsentMode = host.endsWith("google.com") && path.startsWith("/ccm/collect");
+  const isGooglePageAdHost = host.endsWith("google.com") && path.startsWith("/pagead/");
+  const isGoogleSyndicationHost = host.includes("googlesyndication.com") && path.includes("/pagead/");
+  const isGoogleAdsHost =
     host.includes("googleads.g.doubleclick.net") ||
     host.includes("googleadservices.com") ||
-    host.includes("google-analytics.com") ||
-    (host.endsWith("google.com") && path.startsWith("/ccm/collect"))
-  ) {
+    isGoogleSyndicationHost ||
+    isGooglePageAdHost;
+  const isGaHost = host.includes("google-analytics.com");
+
+  if (isGoogleAdsHost || isGaHost || isConsentMode) {
     const rawEventName =
       params.get("ev") ||
       params.get("event") ||
@@ -332,8 +258,7 @@ const handleNetworkEvent = (details) => {
       normalizeString(params.get("gclid")) ||
       normalizeString(parsedUrl.pathname.split("/").filter(Boolean).pop());
 
-    const isGa4Host = host.includes("google-analytics.com") && path.includes("/g/collect");
-    const isConsentMode = host.endsWith("google.com") && path.startsWith("/ccm/collect");
+    const isGa4Host = isGaHost && path.includes("/g/collect");
     const tidUpper = tid.toUpperCase();
     const isGa4Tid = tidUpper.startsWith("G-") || tidUpper.startsWith("GT-");
     const isGoogleAdsTid = tidUpper.startsWith("AW-") || tidUpper.startsWith("DC-");
@@ -416,6 +341,22 @@ const handleNetworkEvent = (details) => {
 
 chrome.webRequest.onBeforeRequest.addListener(handleNetworkEvent, { urls: EVENT_URL_PATTERNS });
 
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    if (details.tabId < 0 || !Array.isArray(details.responseHeaders)) {
+      return;
+    }
+    const header = details.responseHeaders.find(
+      (entry) => typeof entry.name === "string" && entry.name.toLowerCase() === "referrer-policy"
+    );
+    if (header?.value) {
+      tabReferrerPolicyStore.set(details.tabId, header.value.trim());
+    }
+  },
+  { urls: ["<all_urls>"], types: ["main_frame"] },
+  ["responseHeaders"]
+);
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading") {
     resetTabEvents(tabId);
@@ -435,6 +376,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   resetTabEvents(tabId);
   tabOriginMap.delete(tabId);
+  tabReferrerPolicyStore.delete(tabId);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -463,48 +405,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
 
     return true;
-  }
-
-  if (request.action === "injectCornerIndicator") {
-    const tabId =
-      typeof request.tabId === "number" ? request.tabId : typeof sender?.tab?.id === "number" ? sender.tab.id : null;
-
-    if (typeof tabId !== "number") {
-      if (typeof sendResponse === "function") {
-        sendResponse({ success: false, error: "Missing tabId for indicator injection." });
-      }
-      return;
-    }
-
-    showEventIndicator(tabId)
-      .then((result) => {
-        if (typeof sendResponse === "function") {
-          sendResponse({ success: true, result });
-        }
-      })
-      .catch((error) => {
-        console.error("Indicator injection failed", error);
-        if (typeof sendResponse === "function") {
-          sendResponse({ success: false, error: error?.message || "Indicator injection failed." });
-        }
-      });
-
-    return true;
-  }
-
-  if (request.action === "openAnalyticsFromIndicator") {
-    chrome.action
-      .openPopup()
-      .then(() => {
-        chrome.runtime.sendMessage({ action: "focusAnalyticsTab" }).catch(() => {});
-      })
-      .catch(() => {});
-
-    if (typeof sendResponse === "function") {
-      sendResponse({ success: true });
-    }
-
-    return false;
   }
 
   if (request.action !== "collectSEOData") {
@@ -615,7 +515,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           };
         };
 
-        const collectAnalyticsSignals = () => {
+        const scanAnalyticsSignals = () => {
           const signals = {
             usesGA4: false,
             usesPiwik: false,
@@ -631,12 +531,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           if (typeof window.fbq === "function") {
             signals.usesFacebookPixel = true;
           }
+          const headSource = document.head ? document.head.innerHTML.toLowerCase() : "";
+          const scriptNodes = Array.from(document.querySelectorAll("script"));
 
-          const head = document.head;
-          const headSource = head ? head.innerHTML.toLowerCase() : "";
-
-          Array.from(document.querySelectorAll("head script")).forEach((script) => {
-            const source = (script.src || script.textContent || "").toLowerCase();
+          scriptNodes.forEach((script) => {
+            const rawSrc = script.getAttribute("src") || "";
+            const dataSrc = script.getAttribute("data-src") || "";
+            const sourceParts = [script.src || "", rawSrc, dataSrc, script.textContent || ""];
+            const source = sourceParts.join(" ").toLowerCase();
 
             if (!signals.usesGA4 && source.includes("googletagmanager")) {
               signals.usesGA4 = true;
@@ -650,7 +552,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               signals.usesMatomo = true;
             }
 
-            if (!signals.usesFacebookPixel && source.includes("connect.facebook.net")) {
+            if (
+              !signals.usesFacebookPixel &&
+              (source.includes("connect.facebook.net") || source.includes("fbq(") || source.includes("facebook.com/tr"))
+            ) {
               signals.usesFacebookPixel = true;
             }
 
@@ -684,6 +589,80 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               headSource.includes("hotjar.com"))
           ) {
             signals.usesHotjar = true;
+          }
+
+          return signals;
+        };
+
+        const mergeAnalyticsSignals = (base, next) => {
+          if (!next) {
+            return base;
+          }
+
+          return {
+            usesGA4: base.usesGA4 || Boolean(next.usesGA4),
+            usesPiwik: base.usesPiwik || Boolean(next.usesPiwik),
+            usesMatomo: base.usesMatomo || Boolean(next.usesMatomo),
+            usesFacebookPixel: base.usesFacebookPixel || Boolean(next.usesFacebookPixel),
+            usesHotjar: base.usesHotjar || Boolean(next.usesHotjar),
+          };
+        };
+
+        const waitFor = (ms) =>
+          new Promise((resolve) => {
+            window.setTimeout(resolve, ms);
+          });
+
+        const waitForDocumentComplete = () =>
+          new Promise((resolve) => {
+            if (document.readyState === "complete") {
+              resolve();
+              return;
+            }
+
+            let settled = false;
+            let fallbackId = null;
+
+            const finalize = () => {
+              if (settled) {
+                return;
+              }
+              settled = true;
+              if (fallbackId !== null) {
+                window.clearTimeout(fallbackId);
+                fallbackId = null;
+              }
+              document.removeEventListener("readystatechange", handleReadyStateChange);
+              window.removeEventListener("load", handleLoad);
+              resolve();
+            };
+
+            const handleReadyStateChange = () => {
+              if (document.readyState === "complete") {
+                finalize();
+              }
+            };
+
+            const handleLoad = () => {
+              finalize();
+            };
+
+            document.addEventListener("readystatechange", handleReadyStateChange);
+            window.addEventListener("load", handleLoad, { once: true });
+            fallbackId = window.setTimeout(finalize, 800);
+          });
+
+        const collectAnalyticsSignals = async () => {
+          let signals = scanAnalyticsSignals();
+
+          if (!signals.usesFacebookPixel && document.readyState !== "complete") {
+            await waitForDocumentComplete();
+            signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals());
+          }
+
+          if (!signals.usesFacebookPixel) {
+            await waitFor(400);
+            signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals());
           }
 
           return signals;
@@ -863,7 +842,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return cms;
         };
 
-        const analyticsSignals = collectAnalyticsSignals();
+        const analyticsSignals = await collectAnalyticsSignals();
         const socialMeta = collectSocialMeta();
         const cmsSignals = await detectCmsSignals();
 
