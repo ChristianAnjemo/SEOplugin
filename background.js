@@ -1,6 +1,5 @@
 const tabEventStore = new Map();
 const tabOriginMap = new Map();
-const tabReferrerPolicyStore = new Map();
 
 const EVENT_URL_PATTERNS = [
   "*://*.googleads.g.doubleclick.net/*",
@@ -10,6 +9,518 @@ const EVENT_URL_PATTERNS = [
   "*://*.google.com/pagead/*",
   "*://*.facebook.com/tr*",
 ];
+
+const normalizeString = (value) => (typeof value === "string" ? value.trim() : "");
+
+const pageProbeScript = async (options = {}) => {
+  const mode = options.mode === "cms" ? "cms" : "full";
+  const getMetaContent = (selector) => {
+    const node = document.querySelector(selector);
+    if (!node) {
+      return null;
+    }
+
+    return node.getAttribute("content") || node.textContent || null;
+  };
+
+  const collectHeadings = () =>
+    Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")).map((heading) => ({
+      tag: heading.tagName.toLowerCase(),
+      text: heading.textContent.trim(),
+    }));
+
+  const collectLinks = () =>
+    Array.from(document.querySelectorAll("link[rel='canonical']")).map((link) => ({
+      rel: link.getAttribute("rel"),
+      href: link.getAttribute("href"),
+    }));
+
+  const collectHrefLang = () =>
+    Array.from(document.querySelectorAll("link[rel='alternate'][hreflang]")).map((link) => ({
+      hreflang: link.getAttribute("hreflang") || "",
+      href: link.getAttribute("href") || "",
+    }));
+
+  const collectStructuredData = () =>
+    Array.from(document.querySelectorAll('script[type*="ld+json" i]'))
+      .map((script) => {
+        const inlineContent = script.textContent?.trim();
+        if (inlineContent) {
+          return inlineContent;
+        }
+
+        const src = script.getAttribute("src");
+        if (src) {
+          return `{"_metacat_note": "External structured data referenced at ${src}"}`;
+        }
+
+        return "";
+      })
+      .filter(Boolean);
+
+  const collectAnchorSummary = () => {
+    const anchors = Array.from(document.querySelectorAll("a"));
+    const location = document.location;
+    let internal = 0;
+    let external = 0;
+
+    anchors.forEach((anchor) => {
+      const rawHref = anchor.getAttribute("href") || "";
+      const href = rawHref.trim();
+
+      if (!href || href.startsWith("#")) {
+        internal += 1;
+        return;
+      }
+
+      if (href.startsWith("/") || href.startsWith("./") || href.startsWith("../")) {
+        internal += 1;
+        return;
+      }
+
+      try {
+        const url = new URL(href, location.origin);
+        if (url.origin === location.origin) {
+          internal += 1;
+        } else {
+          external += 1;
+        }
+      } catch (error) {
+        external += 1;
+      }
+    });
+
+    return {
+      total: anchors.length,
+      internal,
+      external,
+    };
+  };
+
+        const scanAnalyticsSignals = ({ scope } = { scope: "all" }) => {
+          const signals = {
+            usesGA4: false,
+            usesPiwik: false,
+            usesMatomo: false,
+            usesFacebookPixel: false,
+            usesHotjar: false,
+          };
+
+          if (typeof window._mtm !== "undefined") {
+            signals.usesMatomo = true;
+          }
+
+          if (typeof window.fbq === "function") {
+            signals.usesFacebookPixel = true;
+          }
+
+          const headSource = document.head ? document.head.innerHTML.toLowerCase() : "";
+          const scriptSelector = scope === "head" ? "head script" : "script";
+          const scriptNodes = Array.from(document.querySelectorAll(scriptSelector));
+
+          scriptNodes.some((script) => {
+            const rawSrc = script.getAttribute("src") || "";
+            const dataSrc = script.getAttribute("data-src") || "";
+            const sourceParts = [script.src || "", rawSrc, dataSrc, script.textContent || ""];
+            const source = sourceParts.join(" ").toLowerCase();
+
+            if (!signals.usesGA4 && source.includes("googletagmanager")) {
+              signals.usesGA4 = true;
+            }
+
+            if (!signals.usesPiwik && source.includes("piwik")) {
+              signals.usesPiwik = true;
+            }
+
+            if (!signals.usesMatomo && (source.includes("matomo") || source.includes("window._mtm"))) {
+              signals.usesMatomo = true;
+            }
+
+            if (
+              !signals.usesFacebookPixel &&
+              (source.includes("connect.facebook.net") || source.includes("fbq(") || source.includes("facebook.com/tr"))
+            ) {
+              signals.usesFacebookPixel = true;
+            }
+
+            if (
+              !signals.usesHotjar &&
+              (source.includes("hotjar.com") ||
+                source.includes("hotjar-") ||
+                source.includes("static.hotjar") ||
+                source.includes("hotjar.js"))
+            ) {
+              signals.usesHotjar = true;
+            }
+
+            return (
+              signals.usesGA4 &&
+              signals.usesPiwik &&
+              signals.usesMatomo &&
+              signals.usesFacebookPixel &&
+              signals.usesHotjar
+            );
+          });
+
+          if (!signals.usesPiwik && headSource.includes("piwik")) {
+            signals.usesPiwik = true;
+          }
+
+          if (!signals.usesMatomo && (headSource.includes("matomo") || headSource.includes("window._mtm"))) {
+            signals.usesMatomo = true;
+          }
+
+          if (!signals.usesFacebookPixel && headSource.includes("connect.facebook.net")) {
+            signals.usesFacebookPixel = true;
+          }
+
+          if (
+            !signals.usesHotjar &&
+            (typeof window.hj === "function" ||
+              typeof window._hjSettings !== "undefined" ||
+              headSource.includes("hotjar.com"))
+          ) {
+            signals.usesHotjar = true;
+          }
+
+          return signals;
+        };
+
+        const mergeAnalyticsSignals = (base, next) => {
+          if (!next) {
+            return base;
+          }
+
+          return {
+            usesGA4: base.usesGA4 || Boolean(next.usesGA4),
+            usesPiwik: base.usesPiwik || Boolean(next.usesPiwik),
+            usesMatomo: base.usesMatomo || Boolean(next.usesMatomo),
+            usesFacebookPixel: base.usesFacebookPixel || Boolean(next.usesFacebookPixel),
+            usesHotjar: base.usesHotjar || Boolean(next.usesHotjar),
+          };
+        };
+
+  const waitFor = (ms) =>
+    new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+
+  const waitForDocumentComplete = () =>
+    new Promise((resolve) => {
+      if (document.readyState === "complete") {
+        resolve();
+        return;
+      }
+
+      let settled = false;
+      let fallbackId = null;
+
+      const finalize = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (fallbackId !== null) {
+          window.clearTimeout(fallbackId);
+          fallbackId = null;
+        }
+        document.removeEventListener("readystatechange", handleReadyStateChange);
+        window.removeEventListener("load", handleLoad);
+        resolve();
+      };
+
+      const handleReadyStateChange = () => {
+        if (document.readyState === "complete") {
+          finalize();
+        }
+      };
+
+      const handleLoad = () => {
+        finalize();
+      };
+
+      document.addEventListener("readystatechange", handleReadyStateChange);
+      window.addEventListener("load", handleLoad, { once: true });
+      fallbackId = window.setTimeout(finalize, 800);
+    });
+
+  const collectAnalyticsSignals = async () => {
+    let signals = scanAnalyticsSignals({ scope: "head" });
+
+    const isMissingSignals = () =>
+      !signals.usesGA4 ||
+      !signals.usesPiwik ||
+      !signals.usesMatomo ||
+      !signals.usesFacebookPixel ||
+      !signals.usesHotjar;
+
+    if (isMissingSignals()) {
+      signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals({ scope: "all" }));
+    }
+
+    if (isMissingSignals() && document.readyState !== "complete") {
+      await waitForDocumentComplete();
+      signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals({ scope: "all" }));
+    }
+
+    if (isMissingSignals()) {
+      await waitFor(200);
+      signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals({ scope: "all" }));
+    }
+
+    return signals;
+  };
+
+  const collectSocialMeta = () => {
+    const og = [];
+    const twitter = [];
+    const facebook = [];
+    const linkedin = [];
+
+    Array.from(document.querySelectorAll("meta")).forEach((meta) => {
+      const property = meta.getAttribute("property") || meta.getAttribute("itemprop") || "";
+      const name = meta.getAttribute("name") || "";
+      const content = meta.getAttribute("content") || meta.getAttribute("value") || "";
+
+      if (!content || (!property && !name)) {
+        return;
+      }
+
+      const entry = {
+        property: property || null,
+        name: name || null,
+        content,
+      };
+
+      if (property.startsWith("og:")) {
+        og.push(entry);
+      } else if (property.startsWith("fb:")) {
+        facebook.push(entry);
+      } else if (property.startsWith("linkedin:")) {
+        linkedin.push(entry);
+      } else if (name.startsWith("twitter:")) {
+        twitter.push(entry);
+      }
+    });
+
+    const ogImageEntry = og.find((entry) => entry.property === "og:image");
+
+    return {
+      og,
+      twitter,
+      facebook,
+      linkedin,
+      ogImage: ogImageEntry ? ogImageEntry.content : null,
+    };
+  };
+
+  const detectCmsSignals = async () => {
+    const cms = {
+      usesSiteVision: false,
+      usesWordPress: false,
+      usesOptimizely: false,
+      usesShopify: false,
+      optimizelyLoginDetected: false,
+    };
+
+    const cookieString = document.cookie || "";
+    if (!cms.usesSiteVision && /(^|;\s*)sitevisionltm=/i.test(cookieString)) {
+      cms.usesSiteVision = true;
+    }
+    if (!cms.usesWordPress && /wordpress|wp-content/i.test(cookieString)) {
+      cms.usesWordPress = true;
+    }
+    if (!cms.usesOptimizely && /optimizely|optly|epi-/i.test(cookieString)) {
+      cms.usesOptimizely = true;
+    }
+    if (!cms.usesShopify && /shopify|cdn.shopify|shopifytheme/i.test(cookieString)) {
+      cms.usesShopify = true;
+    }
+
+    const htmlSource = [
+      document.documentElement ? document.documentElement.innerHTML : "",
+      document.head ? document.head.innerHTML : "",
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    if (!cms.usesSiteVision && htmlSource.includes("sitevision")) {
+      cms.usesSiteVision = true;
+    }
+
+    if (!cms.usesSiteVision) {
+      const generator = document
+        .querySelector("meta[name='generator']")
+        ?.getAttribute("content")
+        ?.toLowerCase();
+      if (generator && generator.includes("sitevision")) {
+        cms.usesSiteVision = true;
+      }
+    }
+
+    if (!cms.usesWordPress && (htmlSource.includes("wp-content") || htmlSource.includes("wordpress"))) {
+      cms.usesWordPress = true;
+    }
+
+    if (
+      !cms.usesOptimizely &&
+      (htmlSource.includes("optimizely") || htmlSource.includes("episerver") || htmlSource.includes("epi-"))
+    ) {
+      cms.usesOptimizely = true;
+    }
+
+    if (
+      !cms.usesShopify &&
+      (htmlSource.includes("cdn.shopify") ||
+        htmlSource.includes("shopify.com") ||
+        htmlSource.includes("shopifytheme") ||
+        htmlSource.includes("shopify-features"))
+    ) {
+      cms.usesShopify = true;
+    }
+
+    if (!cms.usesWordPress) {
+      Array.from(document.querySelectorAll("script")).some((node) => {
+        const source = (node.src || node.textContent || "").toLowerCase();
+        if (source.includes("wp-content") || source.includes("wordpress")) {
+          cms.usesWordPress = true;
+          return true;
+        }
+        return false;
+      });
+    }
+
+    if (!cms.usesSiteVision) {
+      Array.from(document.querySelectorAll("script, link, meta")).some((node) => {
+        const source =
+          (
+            node.src ||
+            node.href ||
+            node.getAttribute("content") ||
+            node.getAttribute("data-sitevision") ||
+            node.textContent ||
+            ""
+          ).toLowerCase();
+        if (source.includes("sitevision")) {
+          cms.usesSiteVision = true;
+          return true;
+        }
+        return false;
+      });
+    }
+
+    if (!cms.usesOptimizely) {
+      Array.from(document.querySelectorAll("script")).some((node) => {
+        const source = (node.src || node.textContent || "").toLowerCase();
+        if (source.includes("optimizely") || source.includes("episerver") || source.includes("epi-")) {
+          cms.usesOptimizely = true;
+          return true;
+        }
+        return false;
+      });
+    }
+
+    if (!cms.usesShopify) {
+      Array.from(document.querySelectorAll("script, link, meta")).some((node) => {
+        const source = (
+          node.src ||
+            node.href ||
+            node.getAttribute("content") ||
+            node.textContent ||
+            ""
+        ).toLowerCase();
+        if (source.includes("cdn.shopify") || source.includes("shopify.com") || source.includes("shopify-features")) {
+          cms.usesShopify = true;
+          return true;
+        }
+        return false;
+      });
+    }
+
+    if (!cms.usesOptimizely && chrome?.runtime?.sendMessage) {
+      try {
+        const probeResult = await new Promise((resolve) => {
+          try {
+            chrome.runtime.sendMessage(
+              {
+                action: "checkOptimizelyLogins",
+                origin: document.location.origin,
+              },
+              (response) => {
+                if (chrome.runtime.lastError) {
+                  resolve(null);
+                  return;
+                }
+                resolve(response || null);
+              }
+            );
+          } catch (error) {
+            resolve(null);
+          }
+        });
+
+        if (probeResult?.success && probeResult.result) {
+          cms.usesOptimizely = true;
+          cms.optimizelyLoginDetected = true;
+        }
+      } catch (error) {
+        // Ignore probe failures.
+      }
+    }
+
+    return cms;
+  };
+
+  if (mode === "cms") {
+    const cmsSignals = await detectCmsSignals();
+    return { mode, cms: cmsSignals };
+  }
+
+  const analyticsSignals = await collectAnalyticsSignals();
+  const socialMeta = collectSocialMeta();
+
+  const root = document.documentElement;
+  const htmlLang = root ? root.getAttribute("lang") || null : null;
+
+  return {
+    mode,
+    payload: {
+      url: document.location.href,
+      title: document.title || null,
+      metaDescription: getMetaContent("meta[name='description']"),
+      robots: getMetaContent("meta[name='robots']"),
+      ogTitle: getMetaContent("meta[property='og:title']"),
+      ogDescription: getMetaContent("meta[property='og:description']"),
+      canonicalLinks: collectLinks(),
+      hrefLangLinks: collectHrefLang(),
+      anchors: collectAnchorSummary(),
+      headings: collectHeadings(),
+      structuredDataRaw: collectStructuredData(),
+      analytics: analyticsSignals,
+      socialMeta,
+      pageLang: htmlLang,
+    },
+  };
+};
+
+const runPageCollector = (tabId, mode) =>
+  new Promise((resolve, reject) => {
+    chrome.scripting.executeScript(
+      {
+        target: { tabId, allFrames: false },
+        func: pageProbeScript,
+        args: [{ mode }],
+      },
+      (results) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        resolve(results?.[0]?.result || { mode });
+      }
+    );
+  });
 
 // Known Optimizely/Episerver login paths to probe.
 const OPTIMIZELY_LOGIN_PATHS = [
@@ -129,13 +640,13 @@ const BADGE_ACTIVE_TEXT = "1";
 const BADGE_COLOR = "#00C853";
 let badgeColorApplied = false;
 
-const setBadgeTextSafe = (text) => {
+const setBadgeTextSafe = (text, tabId) => {
   if (!chrome.action || typeof chrome.action.setBadgeText !== "function") {
     return;
   }
 
   try {
-    const result = chrome.action.setBadgeText({ text });
+    const result = chrome.action.setBadgeText({ text, tabId });
     if (result && typeof result.catch === "function") {
       result.catch(() => {});
     }
@@ -165,13 +676,13 @@ const ensureBadgeColor = () => {
   }
 };
 
-const activateBadge = () => {
+const activateBadge = (tabId) => {
   ensureBadgeColor();
-  setBadgeTextSafe(BADGE_ACTIVE_TEXT);
+  setBadgeTextSafe(BADGE_ACTIVE_TEXT, tabId);
 };
 
-const clearBadge = () => {
-  setBadgeTextSafe("");
+const clearBadge = (tabId) => {
+  setBadgeTextSafe("", tabId);
 };
 
 const flagDetectedEvent = (tabId, source) => {
@@ -180,10 +691,7 @@ const flagDetectedEvent = (tabId, source) => {
 
 const resetTabEvents = (tabId) => {
   tabEventStore.delete(tabId);
-  tabReferrerPolicyStore.delete(tabId);
 };
-
-const normalizeString = (value) => (typeof value === "string" ? value.trim() : "");
 
 const handleNetworkEvent = (details) => {
   const { tabId, url } = details;
@@ -300,18 +808,16 @@ const handleNetworkEvent = (details) => {
         params.get("ptype") === "pageview" ||
         params.get("npa") === "0");
 
-    if (isPageView) {
-      const pageLabel = isGa4Hit ? normalizedRawEventName || "page_view" : "Pageview";
+    if (!isGa4Hit && isPageView) {
+      const pageLabel = normalizedRawEventName || "Pageview";
       targetChannel.pageViews.add(pageLabel);
       flagDetectedEvent(effectiveTabId, indicatorSource);
-    } else if (isExplicitConversion || normalizedRawEventName || label) {
-      const entryLabel = isGa4Hit
-        ? normalizedRawEventName || label || "Event"
-        : isConversionPath
-            ? label || normalizeString(params.get("value")) || "Conversion"
-            : label || normalizedRawEventName || "Conversion";
+    } else if (!isGa4Hit && (isExplicitConversion || normalizedRawEventName || label)) {
+      const entryLabel = isConversionPath
+        ? label || normalizeString(params.get("value")) || "Conversion"
+        : label || normalizedRawEventName || "Conversion";
       targetChannel.conversions.add(entryLabel);
-      activateBadge();
+      activateBadge(effectiveTabId);
       flagDetectedEvent(effectiveTabId, indicatorSource);
     }
 
@@ -322,45 +828,24 @@ const handleNetworkEvent = (details) => {
     const rawEventName = normalizeString(params.get("ev") || params.get("event"));
     const eventName = rawEventName.toLowerCase();
 
-    if (!eventName || eventName === "pageview" || eventName === "page_view") {
-      state.meta.pageViews.add("Pageview");
-      flagDetectedEvent(effectiveTabId, "meta");
-      return;
-    }
-
     const conversionName =
       normalizeString(params.get("cd[conversionname]")) ||
       normalizeString(params.get("cd[content_name]")) ||
       rawEventName;
 
     state.meta.conversions.add(conversionName || "Conversion");
-    activateBadge();
+    activateBadge(effectiveTabId);
     flagDetectedEvent(effectiveTabId, "meta");
   }
 };
 
 chrome.webRequest.onBeforeRequest.addListener(handleNetworkEvent, { urls: EVENT_URL_PATTERNS });
 
-chrome.webRequest.onHeadersReceived.addListener(
-  (details) => {
-    if (details.tabId < 0 || !Array.isArray(details.responseHeaders)) {
-      return;
-    }
-    const header = details.responseHeaders.find(
-      (entry) => typeof entry.name === "string" && entry.name.toLowerCase() === "referrer-policy"
-    );
-    if (header?.value) {
-      tabReferrerPolicyStore.set(details.tabId, header.value.trim());
-    }
-  },
-  { urls: ["<all_urls>"], types: ["main_frame"] },
-  ["responseHeaders"]
-);
-
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading") {
     resetTabEvents(tabId);
     tabOriginMap.delete(tabId);
+    clearBadge(tabId);
   }
 
   if (changeInfo.url) {
@@ -376,7 +861,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   resetTabEvents(tabId);
   tabOriginMap.delete(tabId);
-  tabReferrerPolicyStore.delete(tabId);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -407,6 +891,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "collectCMSData") {
+    if (typeof request.tabId !== "number") {
+      if (typeof sendResponse === "function") {
+        sendResponse({ success: false, error: "Invalid tabId." });
+      }
+      return;
+    }
+
+    runPageCollector(request.tabId, "cms")
+      .then((result) => {
+        sendResponse({ success: true, cms: result?.cms || {} });
+      })
+      .catch((error) => {
+        sendResponse({ success: false, error: error?.message || "CMS detection failed." });
+      });
+
+    return true;
+  }
+
   if (request.action !== "collectSEOData") {
     return;
   }
@@ -418,467 +921,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
-  clearBadge();
-
-  chrome.scripting.executeScript(
-    {
-      target: { tabId: request.tabId, allFrames: false },
-      func: async () => {
-        const getMetaContent = (selector) => {
-          const node = document.querySelector(selector);
-          if (!node) {
-            return null;
-          }
-
-          return node.getAttribute("content") || node.textContent || null;
-        };
-
-        const collectHeadings = () =>
-          Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")).map((heading) => ({
-            tag: heading.tagName.toLowerCase(),
-            text: heading.textContent.trim(),
-          }));
-
-        const collectLinks = () =>
-          Array.from(document.querySelectorAll("link[rel='canonical']")).map((link) => ({
-            rel: link.getAttribute("rel"),
-            href: link.getAttribute("href"),
-          }));
-
-        const collectHrefLang = () =>
-          Array.from(document.querySelectorAll("link[rel='alternate'][hreflang]")).map((link) => ({
-            hreflang: link.getAttribute("hreflang") || "",
-            href: link.getAttribute("href") || "",
-          }));
-
-        const collectStructuredData = () =>
-          Array.from(document.querySelectorAll('script[type*="ld+json" i]')).map((script) => {
-            const inlineContent = script.textContent?.trim();
-            if (inlineContent) {
-              return inlineContent;
-            }
-
-            const src = script.getAttribute("src");
-            if (src) {
-              return `{"_metacat_note": "External structured data referenced at ${src}"}`;
-            }
-
-            return "";
-          }).filter(Boolean);
-
-        const collectAnchorSummary = () => {
-          const anchors = Array.from(document.querySelectorAll("a"));
-          const location = document.location;
-          let internal = 0;
-          let external = 0;
-
-          anchors.forEach((anchor) => {
-            const rawHref = anchor.getAttribute("href") || "";
-            const href = rawHref.trim();
-
-            if (!href) {
-              internal += 1;
-              return;
-            }
-
-            if (href.startsWith("#")) {
-              internal += 1;
-              return;
-            }
-
-            if (href.startsWith("/")) {
-              internal += 1;
-              return;
-            }
-
-            if (href.startsWith("./") || href.startsWith("../")) {
-              internal += 1;
-              return;
-            }
-
-            try {
-              const url = new URL(href, location.origin);
-              if (url.origin === location.origin) {
-                internal += 1;
-              } else {
-                external += 1;
-              }
-            } catch (error) {
-              external += 1;
-            }
-          });
-
-          return {
-            total: anchors.length,
-            internal,
-            external,
-          };
-        };
-
-        const scanAnalyticsSignals = () => {
-          const signals = {
-            usesGA4: false,
-            usesPiwik: false,
-            usesMatomo: false,
-            usesFacebookPixel: false,
-            usesHotjar: false,
-          };
-
-          if (typeof window._mtm !== "undefined") {
-            signals.usesMatomo = true;
-          }
-
-          if (typeof window.fbq === "function") {
-            signals.usesFacebookPixel = true;
-          }
-          const headSource = document.head ? document.head.innerHTML.toLowerCase() : "";
-          const scriptNodes = Array.from(document.querySelectorAll("script"));
-
-          scriptNodes.forEach((script) => {
-            const rawSrc = script.getAttribute("src") || "";
-            const dataSrc = script.getAttribute("data-src") || "";
-            const sourceParts = [script.src || "", rawSrc, dataSrc, script.textContent || ""];
-            const source = sourceParts.join(" ").toLowerCase();
-
-            if (!signals.usesGA4 && source.includes("googletagmanager")) {
-              signals.usesGA4 = true;
-            }
-
-            if (!signals.usesPiwik && source.includes("piwik")) {
-              signals.usesPiwik = true;
-            }
-
-            if (!signals.usesMatomo && (source.includes("matomo") || source.includes("window._mtm"))) {
-              signals.usesMatomo = true;
-            }
-
-            if (
-              !signals.usesFacebookPixel &&
-              (source.includes("connect.facebook.net") || source.includes("fbq(") || source.includes("facebook.com/tr"))
-            ) {
-              signals.usesFacebookPixel = true;
-            }
-
-            if (
-              !signals.usesHotjar &&
-              (source.includes("hotjar.com") ||
-                source.includes("hotjar-") ||
-                source.includes("static.hotjar") ||
-                source.includes("hotjar.js"))
-            ) {
-              signals.usesHotjar = true;
-            }
-          });
-
-          if (!signals.usesPiwik && headSource.includes("piwik")) {
-            signals.usesPiwik = true;
-          }
-
-          if (!signals.usesMatomo && (headSource.includes("matomo") || headSource.includes("window._mtm"))) {
-            signals.usesMatomo = true;
-          }
-
-          if (!signals.usesFacebookPixel && headSource.includes("connect.facebook.net")) {
-            signals.usesFacebookPixel = true;
-          }
-
-          if (
-            !signals.usesHotjar &&
-            (typeof window.hj === "function" ||
-              typeof window._hjSettings !== "undefined" ||
-              headSource.includes("hotjar.com"))
-          ) {
-            signals.usesHotjar = true;
-          }
-
-          return signals;
-        };
-
-        const mergeAnalyticsSignals = (base, next) => {
-          if (!next) {
-            return base;
-          }
-
-          return {
-            usesGA4: base.usesGA4 || Boolean(next.usesGA4),
-            usesPiwik: base.usesPiwik || Boolean(next.usesPiwik),
-            usesMatomo: base.usesMatomo || Boolean(next.usesMatomo),
-            usesFacebookPixel: base.usesFacebookPixel || Boolean(next.usesFacebookPixel),
-            usesHotjar: base.usesHotjar || Boolean(next.usesHotjar),
-          };
-        };
-
-        const waitFor = (ms) =>
-          new Promise((resolve) => {
-            window.setTimeout(resolve, ms);
-          });
-
-        const waitForDocumentComplete = () =>
-          new Promise((resolve) => {
-            if (document.readyState === "complete") {
-              resolve();
-              return;
-            }
-
-            let settled = false;
-            let fallbackId = null;
-
-            const finalize = () => {
-              if (settled) {
-                return;
-              }
-              settled = true;
-              if (fallbackId !== null) {
-                window.clearTimeout(fallbackId);
-                fallbackId = null;
-              }
-              document.removeEventListener("readystatechange", handleReadyStateChange);
-              window.removeEventListener("load", handleLoad);
-              resolve();
-            };
-
-            const handleReadyStateChange = () => {
-              if (document.readyState === "complete") {
-                finalize();
-              }
-            };
-
-            const handleLoad = () => {
-              finalize();
-            };
-
-            document.addEventListener("readystatechange", handleReadyStateChange);
-            window.addEventListener("load", handleLoad, { once: true });
-            fallbackId = window.setTimeout(finalize, 800);
-          });
-
-        const collectAnalyticsSignals = async () => {
-          let signals = scanAnalyticsSignals();
-
-          if (!signals.usesFacebookPixel && document.readyState !== "complete") {
-            await waitForDocumentComplete();
-            signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals());
-          }
-
-          if (!signals.usesFacebookPixel) {
-            await waitFor(400);
-            signals = mergeAnalyticsSignals(signals, scanAnalyticsSignals());
-          }
-
-          return signals;
-        };
-
-        const collectSocialMeta = () => {
-          const og = [];
-          const twitter = [];
-          const facebook = [];
-          const linkedin = [];
-
-          Array.from(document.querySelectorAll("meta")).forEach((meta) => {
-            const property = meta.getAttribute("property") || meta.getAttribute("itemprop") || "";
-            const name = meta.getAttribute("name") || "";
-            const content = meta.getAttribute("content") || meta.getAttribute("value") || "";
-
-            if (!content) {
-              return;
-            }
-
-            if (!property && !name) {
-              return;
-            }
-
-            const entry = {
-              property: property || null,
-              name: name || null,
-              content,
-            };
-
-            if (property.startsWith("og:")) {
-              og.push(entry);
-            } else if (property.startsWith("fb:")) {
-              facebook.push(entry);
-            } else if (name.startsWith("twitter:")) {
-              twitter.push(entry);
-            } else if (property.startsWith("article:")) {
-              linkedin.push(entry);
-            } else if (name.startsWith("linkedin:")) {
-              linkedin.push(entry);
-            }
-          });
-
-          const ogImageEntry = og.find((entry) => entry.property === "og:image");
-
-          return {
-            og,
-            twitter,
-            facebook,
-            linkedin,
-            ogImage: ogImageEntry ? ogImageEntry.content : null,
-          };
-        };
-
-        const detectCmsSignals = async () => {
-          const cms = {
-            usesSiteVision: false,
-            usesWordPress: false,
-            usesOptimizely: false,
-            optimizelyLoginDetected: false,
-          };
-
-          const cookieString = document.cookie || "";
-          if (!cms.usesSiteVision && /(^|;\s*)sitevisionltm=/i.test(cookieString)) {
-            cms.usesSiteVision = true;
-          }
-          if (!cms.usesWordPress && /wordpress|wp-content/i.test(cookieString)) {
-            cms.usesWordPress = true;
-          }
-          if (!cms.usesOptimizely && /optimizely|optly|epi-/i.test(cookieString)) {
-            cms.usesOptimizely = true;
-          }
-
-          const htmlSource = [
-            document.documentElement ? document.documentElement.innerHTML : "",
-            document.head ? document.head.innerHTML : "",
-          ]
-            .join(" ")
-            .toLowerCase();
-
-          if (!cms.usesSiteVision && htmlSource.includes("sitevision")) {
-            cms.usesSiteVision = true;
-          }
-
-          if (!cms.usesSiteVision) {
-            const generator = document
-              .querySelector("meta[name='generator']")
-              ?.getAttribute("content")
-              ?.toLowerCase();
-            if (generator && generator.includes("sitevision")) {
-              cms.usesSiteVision = true;
-            }
-          }
-
-          if (!cms.usesWordPress && (htmlSource.includes("wp-content") || htmlSource.includes("wordpress"))) {
-            cms.usesWordPress = true;
-          }
-
-          if (
-            !cms.usesOptimizely &&
-            (htmlSource.includes("optimizely") || htmlSource.includes("episerver") || htmlSource.includes("epi-"))
-          ) {
-            cms.usesOptimizely = true;
-          }
-
-          if (!cms.usesWordPress) {
-            Array.from(document.querySelectorAll("script")).some((node) => {
-              const source = (node.src || node.textContent || "").toLowerCase();
-              if (source.includes("wp-content") || source.includes("wordpress")) {
-                cms.usesWordPress = true;
-                return true;
-              }
-              return false;
-            });
-          }
-
-          if (!cms.usesSiteVision) {
-            Array.from(document.querySelectorAll("script, link, meta" )).some((node) => {
-              const source = (
-                node.src ||
-                node.href ||
-                node.getAttribute("content") ||
-                node.getAttribute("data-sitevision") ||
-                node.textContent ||
-                ""
-              ).toLowerCase();
-              if (source.includes("sitevision")) {
-                cms.usesSiteVision = true;
-                return true;
-              }
-              return false;
-            });
-          }
-
-          if (!cms.usesOptimizely) {
-            Array.from(document.querySelectorAll("script")).some((node) => {
-              const source = (node.src || node.textContent || "").toLowerCase();
-              if (source.includes("optimizely") || source.includes("episerver") || source.includes("epi-")) {
-                cms.usesOptimizely = true;
-                return true;
-              }
-              return false;
-            });
-          }
-
-          if (!cms.usesOptimizely && chrome?.runtime?.sendMessage) {
-            try {
-              const probeResult = await new Promise((resolve) => {
-                try {
-                  chrome.runtime.sendMessage(
-                    {
-                      action: "checkOptimizelyLogins",
-                      origin: document.location.origin,
-                    },
-                    (response) => {
-                      if (chrome.runtime.lastError) {
-                        resolve(null);
-                        return;
-                      }
-                      resolve(response || null);
-                    }
-                  );
-                } catch (error) {
-                  resolve(null);
-                }
-              });
-
-              if (probeResult?.success && probeResult.result) {
-                cms.usesOptimizely = true;
-                cms.optimizelyLoginDetected = true;
-              }
-            } catch (error) {
-              // Silently ignore background probe failures.
-            }
-          }
-
-          return cms;
-        };
-
-        const analyticsSignals = await collectAnalyticsSignals();
-        const socialMeta = collectSocialMeta();
-        const cmsSignals = await detectCmsSignals();
-
-        const root = document.documentElement;
-        const htmlLang = root ? root.getAttribute("lang") || null : null;
-
-        return {
-          url: document.location.href,
-          title: document.title || null,
-          metaDescription: getMetaContent("meta[name='description']"),
-          robots: getMetaContent("meta[name='robots']"),
-          ogTitle: getMetaContent("meta[property='og:title']"),
-          ogDescription: getMetaContent("meta[property='og:description']"),
-          canonicalLinks: collectLinks(),
-          hrefLangLinks: collectHrefLang(),
-          anchors: collectAnchorSummary(),
-          headings: collectHeadings(),
-          structuredDataRaw: collectStructuredData(),
-          analytics: analyticsSignals,
-          socialMeta,
-          pageLang: htmlLang,
-          cms: cmsSignals,
-        };
-      },
-    },
-    (results) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({
-          success: false,
-          error: chrome.runtime.lastError.message,
-        });
-        return;
-      }
-
-      const [scriptResult] = results || [];
-      const payload = scriptResult?.result || {};
+  clearBadge(request.tabId);
+
+  runPageCollector(request.tabId, "full")
+    .then((result) => {
+      const payload = result?.payload || {};
       const events = serializeEventState(request.tabId);
 
       if (payload?.url) {
@@ -886,9 +933,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           const origin = new URL(payload.url).origin;
           tabOriginMap.set(request.tabId, origin);
         } catch (error) {
-          // ignore
+          tabOriginMap.delete(request.tabId);
         }
       }
+
+      delete payload.mode;
 
       sendResponse({
         success: true,
@@ -897,8 +946,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           events,
         },
       });
-    }
-  );
-
+    })
+    .catch((error) => {
+      sendResponse({ success: false, error: error?.message || "SEO data collection failed." });
+    });
   return true;
 });

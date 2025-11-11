@@ -16,7 +16,7 @@
           <h1 class="hero-title">Metacat</h1>
           
         </div>
-        <p>Get fast stats from current page.</p>
+        <p>Fast stats on any page.</p>
       </header>
       <nav class="tabs" role="tablist" aria-label="SEO panels">
         <button
@@ -89,7 +89,7 @@
         </div>
         <div class="card" id="canonicalsCard">
           <div class="card-header">
-            <span class="label">Canonical URLs</span>
+            <span class="label">Canonical URL</span>
           </div>
           <ul id="canonicals" class="list"></ul>
         </div>
@@ -118,7 +118,10 @@
         <div class="card" id="headingsCard">
           <button id="headingsToggle" class="card-header toggle-button" type="button" aria-expanded="false">
             <span class="label">Headings</span>
-            <span class="toggle-indicator" aria-hidden="true">▼</span>
+            <span class="toggle-helper-pill">
+              <span class="toggle-helper">Show headings</span>
+              <span class="toggle-indicator" aria-hidden="true" role="presentation">▼</span>
+            </span>
           </button>
           <div id="headingsSummary" class="heading-summary"></div>
           <div id="headingsDetail" class="heading-detail" hidden>
@@ -161,17 +164,27 @@
         role="tabpanel"
         aria-labelledby="opengraph-tab"
       >
-        <div class="card" id="ogTitleCard" data-accent="true">
+        <div class="card" id="openGraphMetaCard" data-accent="true">
           <div class="card-header">
-            <span class="label">Open Graph title</span>
+            <span class="label">Open Graph</span>
           </div>
-          <p id="ogTitle" class="value">N/A</p>
+          <ul id="openGraphMetaList" class="meta-list"></ul>
         </div>
-        <div class="card" id="ogDescriptionCard" data-accent="true">
-          <div class="card-header">
-            <span class="label">Open Graph description</span>
+        <div class="card" id="socialMetaCard" hidden aria-hidden="true">
+          <div class="social-meta-sections">
+            <section class="social-meta-section" id="facebookMetaSection" aria-hidden="true" hidden>
+              <h3>Facebook</h3>
+              <ul id="facebookMetaList" class="meta-list"></ul>
+            </section>
+            <section class="social-meta-section" id="twitterMetaSection" aria-hidden="true" hidden>
+              <h3>Twitter / X</h3>
+              <ul id="twitterMetaList" class="meta-list"></ul>
+            </section>
+            <section class="social-meta-section" id="linkedinMetaSection" aria-hidden="true" hidden>
+              <h3>LinkedIn</h3>
+              <ul id="linkedinMetaList" class="meta-list"></ul>
+            </section>
           </div>
-          <p id="ogDescription" class="value">N/A</p>
         </div>
       </section>
       <section
@@ -186,7 +199,10 @@
           <div class="card-header">
             <span class="label">Detected CMS</span>
           </div>
-          <p id="cmsStatus" class="value">Scanning...</p>
+          <p id="cmsStatus" class="value"></p>
+        </div>
+        <div class="cms-actions">
+          <button id="cmsScanButton" class="cms-scan-button" type="button">Check CMS</button>
         </div>
       </section>
     </main>

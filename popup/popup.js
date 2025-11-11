@@ -15,12 +15,13 @@ const analyticsIndicator = document.getElementById("analyticsIndicator");
 const themeToggleButton = document.getElementById("themeToggle");
 const themeToggleIcon = themeToggleButton ? themeToggleButton.querySelector(".theme-icon") : null;
 let currentTabId = null;
+let currentPanelKey = "seo";
+const TAB_STORAGE_KEY = "metacat-active-tab";
+let isCmsScanning = false;
 const cards = {
   title: document.getElementById("titleCard"),
   description: document.getElementById("descriptionCard"),
   robots: document.getElementById("robotsCard"),
-  ogTitle: document.getElementById("ogTitleCard"),
-  ogDescription: document.getElementById("ogDescriptionCard"),
   canonicals: document.getElementById("canonicalsCard"),
   hrefLang: document.getElementById("hrefLangCard"),
   links: document.getElementById("linksCard"),
@@ -46,18 +47,6 @@ const fieldConfigs = [
     limit: 156,
     limitLabel: "/156",
   },
-  {
-    cardKey: "ogTitle",
-    element: document.getElementById("ogTitle"),
-    dataKey: "ogTitle",
-    hideWhenEmpty: true,
-  },
-  {
-    cardKey: "ogDescription",
-    element: document.getElementById("ogDescription"),
-    dataKey: "ogDescription",
-    hideWhenEmpty: true,
-  },
 ];
 const canonicalsList = document.getElementById("canonicals");
 const hrefLangList = document.getElementById("hrefLangList");
@@ -72,6 +61,16 @@ const linksInternal = document.getElementById("linksInternal");
 const linksExternal = document.getElementById("linksExternal");
 const gaStatusElement = document.getElementById("gaStatus");
 const cmsStatusElement = document.getElementById("cmsStatus");
+const cmsScanButton = document.getElementById("cmsScanButton");
+const openGraphMetaCard = document.getElementById("openGraphMetaCard");
+const openGraphMetaList = document.getElementById("openGraphMetaList");
+const socialMetaCard = document.getElementById("socialMetaCard");
+const facebookMetaSection = document.getElementById("facebookMetaSection");
+const twitterMetaSection = document.getElementById("twitterMetaSection");
+const linkedinMetaSection = document.getElementById("linkedinMetaSection");
+const facebookMetaList = document.getElementById("facebookMetaList");
+const twitterMetaList = document.getElementById("twitterMetaList");
+const linkedinMetaList = document.getElementById("linkedinMetaList");
 const googleAdsEventsList = document.getElementById("googleAdsEvents");
 const ga4EventsList = document.getElementById("ga4Events");
 const metaEventsList = document.getElementById("metaEvents");
@@ -112,14 +111,83 @@ const CMS_MAPPINGS = [
     label: "Optimizely",
     key: "usesOptimizely",
   },
+  {
+    label: "Shopify",
+    key: "usesShopify",
+  },
 ];
 
-const activateTab = (tabName) => {
+const persistActiveTabSelection = (tabName) => {
+  if (!tabButtons[tabName]) {
+    return;
+  }
+
+  if (chrome.storage && chrome.storage.local) {
+    try {
+      chrome.storage.local.set({ [TAB_STORAGE_KEY]: tabName }, () => {});
+    } catch (error) {
+      // Ignore storage write failures.
+    }
+  }
+
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, tabName);
+  } catch (error) {
+    // Ignore localStorage failures.
+  }
+};
+
+const getLocalStoredTab = () => {
+  try {
+    const stored = localStorage.getItem(TAB_STORAGE_KEY);
+    return typeof stored === "string" ? stored : null;
+  } catch (error) {
+    return null;
+  }
+};
+
+const loadStoredTabSelection = () =>
+  new Promise((resolve) => {
+    const fallbackLocal = () => {
+      resolve(getLocalStoredTab());
+    };
+
+    if (!chrome.storage || !chrome.storage.local) {
+      fallbackLocal();
+      return;
+    }
+
+    try {
+      chrome.storage.local.get([TAB_STORAGE_KEY], (result) => {
+        if (chrome.runtime.lastError) {
+          fallbackLocal();
+          return;
+        }
+
+        const stored = result?.[TAB_STORAGE_KEY];
+        if (typeof stored === "string") {
+          resolve(stored);
+          return;
+        }
+
+        fallbackLocal();
+      });
+    } catch (error) {
+      fallbackLocal();
+    }
+  });
+
+const activateTab = (tabName, { skipPersist = false } = {}) => {
+  const availableTab =
+    tabButtons[tabName] ? tabName : Object.keys(tabButtons).find((key) => tabButtons[key]);
+  const resolvedTab = availableTab || "seo";
+  currentPanelKey = resolvedTab;
+
   Object.entries(tabButtons).forEach(([name, button]) => {
     if (!button) {
       return;
     }
-    const isActive = name === tabName;
+    const isActive = name === resolvedTab;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-selected", String(isActive));
     button.setAttribute("tabindex", isActive ? "0" : "-1");
@@ -129,13 +197,17 @@ const activateTab = (tabName) => {
     if (!panel) {
       return;
     }
-    const isActive = name === tabName;
+    const isActive = name === resolvedTab;
     panel.hidden = !isActive;
     panel.setAttribute("aria-hidden", String(!isActive));
   });
 
-  if (tabName === "analytics" && analyticsIndicator) {
+  if (resolvedTab === "analytics" && analyticsIndicator) {
     analyticsIndicator.classList.remove("visible");
+  }
+
+  if (!skipPersist) {
+    persistActiveTabSelection(resolvedTab);
   }
 };
 
@@ -146,7 +218,25 @@ Object.entries(tabButtons).forEach(([name, button]) => {
   button.addEventListener("click", () => activateTab(name));
 });
 
-activateTab("seo");
+const initialStoredTab = getLocalStoredTab();
+const initialTabKey = initialStoredTab && tabButtons[initialStoredTab] ? initialStoredTab : "seo";
+activateTab(initialTabKey, { skipPersist: true });
+
+loadStoredTabSelection()
+  .then((storedTab) => {
+    if (storedTab && tabButtons[storedTab] && storedTab !== currentPanelKey) {
+      activateTab(storedTab, { skipPersist: true });
+    }
+  })
+  .catch(() => {});
+
+if (cmsScanButton) {
+  cmsScanButton.addEventListener("click", () => {
+    handleCmsScan().catch((error) => {
+      console.error("CMS scan invocation failed", error);
+    });
+  });
+}
 
 const THEME_STORAGE_KEY = "metacat-theme";
 const heroIcon = document.querySelector(".hero-icon");
@@ -290,6 +380,19 @@ const requestSeoData = (tabId) =>
     );
   });
 
+const requestCmsData = (tabId) =>
+  new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      {
+        action: "collectCMSData",
+        tabId,
+      },
+      (response) => {
+        resolve(response || { success: false, error: "No response from background script." });
+      }
+    );
+  });
+
 const updateStatus = (message, { muted = false } = {}) => {
   statusElement.textContent = message;
   statusElement.classList.toggle("muted", muted);
@@ -373,6 +476,168 @@ const renderEventSummary = (listElement, eventData) => {
   });
 
   return true;
+};
+
+const SOCIAL_META_SECTIONS = [
+  {
+    key: "facebook",
+    section: facebookMetaSection,
+    list: facebookMetaList,
+    getLabel: (entry) => entry.property || entry.name || "property",
+  },
+  {
+    key: "twitter",
+    section: twitterMetaSection,
+    list: twitterMetaList,
+    getLabel: (entry) => entry.name || entry.property || "name",
+  },
+  {
+    key: "linkedin",
+    section: linkedinMetaSection,
+    list: linkedinMetaList,
+    getLabel: (entry) => entry.property || entry.name || "property",
+  },
+];
+
+const renderSocialMeta = (socialMeta) => {
+  if (openGraphMetaCard && openGraphMetaList) {
+    const ogEntries = Array.isArray(socialMeta?.og) ? socialMeta.og : [];
+    if (ogEntries.length) {
+      openGraphMetaCard.hidden = false;
+      openGraphMetaCard.setAttribute("aria-hidden", "false");
+      openGraphMetaList.replaceChildren();
+      ogEntries.forEach((entry) => {
+        const li = document.createElement("li");
+        const label = document.createElement("strong");
+        label.textContent = entry.property || entry.name || "property";
+        const value = document.createElement("span");
+        value.textContent = entry.content;
+        li.append(label, value);
+        openGraphMetaList.appendChild(li);
+      });
+    } else {
+      openGraphMetaCard.hidden = true;
+      openGraphMetaCard.setAttribute("aria-hidden", "true");
+      openGraphMetaList.replaceChildren();
+    }
+  }
+
+  if (!socialMetaCard) {
+    return;
+  }
+
+  const metaData = socialMeta && typeof socialMeta === "object" ? socialMeta : null;
+  if (!metaData) {
+    socialMetaCard.hidden = true;
+    socialMetaCard.setAttribute("aria-hidden", "true");
+    SOCIAL_META_SECTIONS.forEach(({ section, list }) => {
+      if (section) {
+        section.hidden = true;
+        section.setAttribute("aria-hidden", "true");
+      }
+      if (list) {
+        list.replaceChildren();
+      }
+    });
+    return;
+  }
+
+  let hasAnySection = false;
+
+  SOCIAL_META_SECTIONS.forEach(({ key, section, list, getLabel }) => {
+    const entries = Array.isArray(metaData[key]) ? metaData[key] : [];
+    if (!section || !list) {
+      return;
+    }
+
+    if (entries.length === 0) {
+      section.hidden = true;
+      section.setAttribute("aria-hidden", "true");
+      list.replaceChildren();
+      return;
+    }
+
+    hasAnySection = true;
+    section.hidden = false;
+    section.setAttribute("aria-hidden", "false");
+    list.replaceChildren();
+
+    entries.forEach((entry) => {
+      const li = document.createElement("li");
+      const label = document.createElement("strong");
+      label.textContent = getLabel(entry);
+      const value = document.createElement("span");
+      value.textContent = entry.content;
+      li.append(label, value);
+      list.appendChild(li);
+    });
+  });
+
+  socialMetaCard.hidden = !hasAnySection;
+  socialMetaCard.setAttribute("aria-hidden", hasAnySection ? "false" : "true");
+};
+
+const CMS_BUTTON_DEFAULT_TEXT = cmsScanButton?.textContent?.trim() || "Check CMS";
+const CMS_BUTTON_LOADING_TEXT = "Checking...";
+
+const setCmsButtonState = (state) => {
+  if (!cmsScanButton) {
+    return;
+  }
+
+  if (state === "loading") {
+    cmsScanButton.disabled = true;
+    cmsScanButton.textContent = CMS_BUTTON_LOADING_TEXT;
+    return;
+  }
+
+  cmsScanButton.disabled = false;
+  cmsScanButton.textContent = CMS_BUTTON_DEFAULT_TEXT;
+};
+
+const renderCmsData = (cmsSignals, { isPending = false, error } = {}) => {
+  if (!cmsStatusElement) {
+    return;
+  }
+
+  cmsStatusElement.classList.remove("badge-list");
+
+  if (isPending) {
+    cmsStatusElement.textContent = "Scanning for CMS...";
+    applyCardState("cms", { isAlert: false });
+    return;
+  }
+
+  if (error) {
+    cmsStatusElement.textContent = error;
+    applyCardState("cms", { isAlert: true });
+    return;
+  }
+
+  const cmsData = cmsSignals && typeof cmsSignals === "object" ? cmsSignals : null;
+  if (!cmsData) {
+    cmsStatusElement.textContent = "";
+    applyCardState("cms", { isAlert: false });
+    return;
+  }
+
+  const detectedCms = CMS_MAPPINGS.filter(({ key }) => Boolean(cmsData[key]));
+  if (detectedCms.length) {
+    const fragment = document.createDocumentFragment();
+    detectedCms.forEach(({ label }) => {
+      const badge = document.createElement("span");
+      badge.className = "badge-item";
+      badge.textContent = label;
+      fragment.appendChild(badge);
+    });
+    cmsStatusElement.classList.add("badge-list");
+    cmsStatusElement.replaceChildren(fragment);
+    applyCardState("cms", { isAlert: false });
+    return;
+  }
+
+  cmsStatusElement.textContent = "No CMS detected.";
+  applyCardState("cms", { isAlert: false });
 };
 
 const renderSeoData = (data) => {
@@ -459,12 +724,9 @@ const renderSeoData = (data) => {
   if (canonicalArray.length > 0) {
     hasCanonicals = renderList(canonicalsList, canonicalArray, (link) => {
       const fragment = document.createDocumentFragment();
-      const rel = document.createElement("strong");
-      rel.textContent = link.rel;
-      const separator = document.createTextNode(": ");
       const href = document.createElement("span");
       href.textContent = link.href || "N/A";
-      fragment.append(rel, separator, href);
+      fragment.append(href);
       return fragment;
     });
     Array.from(canonicalsList.children).forEach((li, index) => {
@@ -623,6 +885,8 @@ const renderSeoData = (data) => {
     }
   }
 
+  renderSocialMeta(data?.socialMeta || null);
+
   const anchorSummary = data?.anchors || { total: 0, internal: 0, external: 0 };
   const linksCardAlert = anchorSummary.total === 0;
   applyCardState("links", { isAlert: linksCardAlert, counter: linksTotal });
@@ -703,26 +967,7 @@ const renderSeoData = (data) => {
 
   applyCardState("analytics", { isAlert: false });
 
-  const cmsSignals = data?.cms || {};
-  const detectedCms = CMS_MAPPINGS.filter(({ key }) => Boolean(cmsSignals[key]));
-  if (cmsStatusElement) {
-    if (detectedCms.length) {
-      const fragment = document.createDocumentFragment();
-      detectedCms.forEach(({ label }) => {
-        const badge = document.createElement("span");
-        badge.className = "badge-item";
-        badge.textContent = label;
-        fragment.appendChild(badge);
-      });
-      cmsStatusElement.classList.add("badge-list");
-      cmsStatusElement.replaceChildren(fragment);
-    } else {
-      cmsStatusElement.classList.remove("badge-list");
-      cmsStatusElement.textContent = "No CMS patterns detected.";
-    }
-  }
-
-  applyCardState("cms", { isAlert: false });
+  renderCmsData(data?.cms || null);
 
   const eventSignals = data?.events || {};
   const hasGoogleAdsEvents = renderEventSummary(googleAdsEventsList, eventSignals.googleAds);
@@ -793,6 +1038,49 @@ const renderSeoData = (data) => {
   }
 };
 
+const handleCmsScan = async () => {
+  if (isCmsScanning) {
+    return;
+  }
+
+  let targetTabId = currentTabId;
+  if (typeof targetTabId !== "number") {
+    try {
+      const tab = await queryActiveTab();
+      if (tab?.id) {
+        targetTabId = tab.id;
+        currentTabId = tab.id;
+      }
+    } catch (error) {
+      console.error("Failed to resolve active tab for CMS scan", error);
+    }
+  }
+
+  if (typeof targetTabId !== "number") {
+    renderCmsData(null, { error: "Unable to determine the active tab." });
+    return;
+  }
+
+  isCmsScanning = true;
+  setCmsButtonState("loading");
+  renderCmsData(null, { isPending: true });
+
+  try {
+    const response = await requestCmsData(targetTabId);
+    if (!response?.success) {
+      throw new Error(response?.error || "CMS detection failed.");
+    }
+
+    renderCmsData(response.cms || {});
+  } catch (error) {
+    console.error("CMS scan failed", error);
+    renderCmsData(null, { error: error.message || "CMS detection failed." });
+  } finally {
+    isCmsScanning = false;
+    setCmsButtonState("idle");
+  }
+};
+
 const handleFetch = async () => {
   updateStatus("Collecting SEO data from the active tab...", { muted: false });
 
@@ -813,7 +1101,6 @@ const handleFetch = async () => {
     renderSeoData(response.data);
     statusElement.textContent = "";
     statusElement.hidden = true;
-    activateTab("seo");
   } catch (error) {
     console.error(error);
     updateStatus(error.message || "Something went wrong while collecting SEO data.", {
